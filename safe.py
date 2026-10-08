@@ -72,7 +72,9 @@ LIMITS = {"8cf0b93cd9d3e32167f8de799f8e55df33697bb155a46b384f39bd78e75879b5": ("
 ROUTER_THIS = "0x0000000000000000000000000000000000000002"      # SwapRouter02: "the router", then unwrap
 
 CHUNK = 4000            # hex chars per safe_data line (a USB line is at most 6 KB)
-MAX_DATA = 24000        # bytes of tx data the wedgie takes in pieces
+# bytes of tx data the wedgie takes in pieces. Measured on a virtual RP2040 (tools/safechip.mjs): 16 KB signs,
+# 20 KB runs out of memory joining the pieces (one block that big on a used heap). 12 KB leaves room.
+MAX_DATA = 12000
 
 # Safe's MultiSend contracts (1.3.0 and 1.4.1, both deployments): a batch is a DELEGATECALL to one of
 # these, and the wedgie shows every action in it. A DELEGATECALL to anything else stays red.
@@ -145,7 +147,10 @@ def hx(b):
 
 # ---- the transaction --------------------------------------------------------------------------
 
-pieces = []             # a big tx's data, sent ahead in safe_data lines (hex strings)
+# Kept as bytes, each piece decoded as it comes: hex strings joined and then decoded needed ~5x the data at
+# once and ran a virtual RP2040 out of memory at 12 KB (wedgie-dev tools/safechip.mjs). As bytes the join
+# needs 2x, once.
+pieces = []             # a big tx's data, sent ahead in safe_data lines (bytes, one per piece)
 have = 0                # bytes of it so far
 
 
@@ -155,12 +160,23 @@ def on_data(mid, m):
     at, h = m.get("at"), str(m.get("hex") or "")
     if at == 0:
         pieces, have = [], 0
-    if at != have or len(h) % 2 or len(h) > CHUNK or have + len(h) // 2 > MAX_DATA:
+    if have + len(h) // 2 > MAX_DATA:
+        pieces, have = [], 0
+        W.send({"id": mid, "type": "error", "error": "too big: a wedgie takes up to %d bytes of tx data" % MAX_DATA})
+        return
+    if at != have or len(h) % 2 or len(h) > CHUNK:
         pieces, have = [], 0
         W.send({"id": mid, "type": "error", "error": "bad piece"})
         return
-    pieces.append(h)
-    have += len(h) // 2
+    try:
+        b = binascii.unhexlify(h)
+    except Exception:
+        pieces, have = [], 0
+        W.send({"id": mid, "type": "error", "error": "bad piece"})
+        return
+    h = m = None
+    pieces.append(b)
+    have += len(b)
     W.send({"id": mid, "type": "safe_data", "have": have})
 
 
@@ -169,10 +185,14 @@ def parse(t):
     global pieces, have
     data = t.get("data") or "0x"
     if data == "@":
-        data, pieces, have = "".join(pieces), [], 0
         gc.collect()
+        data = b"".join(pieces)
+        pieces, have = [], 0
+        gc.collect()
+    else:
+        data = unhex(data)
     tx = {"chainId": num(t["chainId"]), "safe": addr(t["safe"]), "to": addr(t["to"]),
-          "value": num(t.get("value", 0)), "data": unhex(data),
+          "value": num(t.get("value", 0)), "data": data,
           "operation": num(t.get("operation", 0)), "safeTxGas": num(t.get("safeTxGas", 0)),
           "baseGas": num(t.get("baseGas", 0)), "gasPrice": num(t.get("gasPrice", 0)),
           "gasToken": addr(t.get("gasToken") or "0x" + "0" * 40),

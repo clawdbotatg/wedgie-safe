@@ -45,7 +45,8 @@ pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`
 {"id":4,"type":"safe_sign","tx":{..., "data":"@"}}
 ```
 
-`at` = bytes sent so far (0 starts over). The wedgie hashes what it was given, so the host still checks
+`at` = bytes sent so far (0 starts over). At most 12000 bytes of data (more answers `too big`: joining
+the pieces needs one block that size, and a used RP2040 heap doesn't always have a bigger one). The wedgie hashes what it was given, so the host still checks
 the `safeTxHash` it gets back.
 
 What it reads in plain words: ETH and token sends, owner and threshold changes, modules on and off, the
