@@ -30,7 +30,24 @@ One JSON line each way. Anything else goes to the wedgie firmware as usual.
 -> {"id":1,"type":"refused"}
 ```
 
-`hello` also returns `"safe": {"x", "y"}` (null before the key is made).
+`hello` also returns `"safe": {"x", "y"}` (null before the key is made) and `"safe_chunk": 4000`.
+
+A USB line is at most 6 KB. A bigger transaction (a bridge swap's calldata) sends its data ahead in
+pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`:
+
+```
+{"id":2,"type":"safe_data","at":0,"hex":"8d80ff0a..."}     -> {"id":2,"type":"safe_data","have":2000}
+{"id":3,"type":"safe_data","at":2000,"hex":"..."}          -> {"id":3,"type":"safe_data","have":3900}
+{"id":4,"type":"safe_sign","tx":{..., "data":"@"}}
+```
+
+`at` = bytes sent so far (0 starts over). The wedgie hashes what it was given, so the host still checks
+the `safeTxHash` it gets back.
+
+What it reads in plain words: ETH and token sends, owner and threshold changes, modules on and off, the
+7-day recovery module (Candide: guardians, cancel), Instant Wallet's daily budget (Zodiac Roles), exact
+approvals, and swaps through Uniswap (pay, minimum back, who gets paid) or LI.FI (whether the calldata
+names this Safe). Anything else is a red line with its selector and address.
 
 The Safe signature for this owner is a contract signature (`v = 0`): `r` = the signer contract,
 `s` = offset of the dynamic part, which holds `abi.encode(authenticatorData, clientDataFields, r, s)`.

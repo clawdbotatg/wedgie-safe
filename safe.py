@@ -24,7 +24,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-1"
+FW = "safe-2"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -37,9 +37,38 @@ CHAINS = {1: "Ethereum", 10: "Optimism", 100: "Gnosis", 137: "Polygon", 8453: "B
 # tokens the wedgie knows itself: (chain, address) -> (symbol, decimals). Others show their raw amount.
 TOKENS = {
     (1, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"): ("USDC", 6),
+    (1, "0xdac17f958d2ee523a2206206994597c13d831ec7"): ("USDT", 6),
+    (1, "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"): ("WETH", 18),
+    (1, "0x2260fac5e5542a773aa44fbcfed7c193bc2c599"): ("WBTC", 8),
+    (1, "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"): ("cbBTC", 8),
+    (1, "0x6b175474e89094c44da98b954eedeac495271d0f"): ("DAI", 18),
     (8453, "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"): ("USDC", 6),
+    (8453, "0x4200000000000000000000000000000000000006"): ("WETH", 18),
+    (8453, "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"): ("cbBTC", 8),
+    (8453, "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"): ("DAI", 18),
+    (8453, "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"): ("USDT", 6),
     (84532, "0x036cbd53842c5426634e7929541ec2318f3dcf7e"): ("USDC", 6),
 }
+
+# contracts with a name: the same address on every chain unless the chain is in the key.
+# A swap router gets an exact approval and the swap names this Safe as who gets paid (checked below).
+ROUTERS = {"0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": "LI.FI",
+           "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap",     # SwapRouter02, Base
+           "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap"}     # SwapRouter02, Ethereum
+UNISWAP = ("0x2626664c2603336e57b271c5c0b26f421741e481", "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45")
+RECOVERY = "0x088f6cfd8bb1ddb1bb069ccb3fc1a98927d233f2"         # Candide social recovery, 7 days
+PASSKEY_FACTORY = "0x1d31f259ee307358a26dfb23eb365939e8641195"  # safe-modules passkey 0.2.1
+MODULE_FACTORY = "0x000000000000addb49795b0f9ba5bc298cdda236"   # Zodiac ModuleProxyFactory
+ROLES_COPY = "0xf2964ce6161ce0e75964fe7927ce114cb0b283d5"       # Zodiac Roles 2.1.1
+MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"       # the budget sends ETH through it
+MODULES = {RECOVERY: "7-day recovery"}
+# Roles allowance keys Instant Wallet uses (keccak of the name): what they count
+LIMITS = {"8cf0b93cd9d3e32167f8de799f8e55df33697bb155a46b384f39bd78e75879b5": ("USDC", 6),   # instant-wallet.burner.usdc
+          "45cc4838df5ba19e2e80bafaf996e5acf9194b3706f31dfa92fdfb8cc4fd3017": ("ETH", 18)}   # instant-wallet.burner.eth
+ROUTER_THIS = "0x0000000000000000000000000000000000000002"      # SwapRouter02: "the router", then unwrap
+
+CHUNK = 4000            # hex chars per safe_data line (a USB line is at most 6 KB)
+MAX_DATA = 24000        # bytes of tx data the wedgie takes in pieces
 
 # Safe's MultiSend contracts (1.3.0 and 1.4.1, both deployments): a batch is a DELEGATECALL to one of
 # these, and the wedgie shows every action in it. A DELEGATECALL to anything else stays red.
@@ -111,10 +140,34 @@ def hx(b):
 
 # ---- the transaction --------------------------------------------------------------------------
 
+pieces = []             # a big tx's data, sent ahead in safe_data lines (hex strings)
+have = 0                # bytes of it so far
+
+
+def on_data(mid, m):
+    """{"type":"safe_data","at":<bytes so far>,"hex":"..."}: a piece of the next tx's data. at 0 starts over."""
+    global pieces, have
+    at, h = m.get("at"), str(m.get("hex") or "")
+    if at == 0:
+        pieces, have = [], 0
+    if at != have or len(h) % 2 or len(h) > CHUNK or have + len(h) // 2 > MAX_DATA:
+        pieces, have = [], 0
+        W.send({"id": mid, "type": "error", "error": "bad piece"})
+        return
+    pieces.append(h)
+    have += len(h) // 2
+    W.send({"id": mid, "type": "safe_data", "have": have})
+
+
 def parse(t):
-    """The fields, checked and normalized. Raises ValueError on anything off."""
+    """The fields, checked and normalized. Raises ValueError on anything off. data "@" = the pieces sent ahead."""
+    global pieces, have
+    data = t.get("data") or "0x"
+    if data == "@":
+        data, pieces, have = "".join(pieces), [], 0
+        gc.collect()
     tx = {"chainId": num(t["chainId"]), "safe": addr(t["safe"]), "to": addr(t["to"]),
-          "value": num(t.get("value", 0)), "data": unhex(t.get("data") or "0x"),
+          "value": num(t.get("value", 0)), "data": unhex(data),
           "operation": num(t.get("operation", 0)), "safeTxGas": num(t.get("safeTxGas", 0)),
           "baseGas": num(t.get("baseGas", 0)), "gasPrice": num(t.get("gasPrice", 0)),
           "gasToken": addr(t.get("gasToken") or "0x" + "0" * 40),
@@ -147,6 +200,86 @@ def _addr_lines(head, a, c=INK):
     return [(head, MUTED), (a[:22], c), ("  " + a[22:], c)]
 
 
+def _tok(tx, a):
+    t = TOKENS.get((tx["chainId"], a))
+    return t if t else (None, 0)
+
+
+def _amt(tx, a, n):
+    sym, dec = _tok(tx, a)
+    return "%s %s" % (amount(n, dec), sym) if sym else "%d of %s" % (n, short(a))
+
+
+def _name(a, safe):
+    return "this Safe" if a == safe else ROUTERS.get(a) or MODULES.get(a) or short(a)
+
+
+def _bytes_at(data, off):
+    """An ABI `bytes` whose head word is at `off` (offsets count from `base`)."""
+    n = int.from_bytes(data[off:off + 32], "big")
+    return data[off + 32:off + 32 + n]
+
+
+def _uniswap(tx):
+    """SwapRouter02 multicall(deadline, [exactInput, unwrapWETH9?]) as lines, or None."""
+    data, safe = tx["data"], tx["safe"]
+    b = data[4:]
+    arr = int.from_bytes(b[32:64], "big")
+    n = int.from_bytes(b[arr:arr + 32], "big")
+    calls = []
+    for i in range(n):
+        o = int.from_bytes(b[arr + 32 + 32 * i:arr + 64 + 32 * i], "big")
+        calls.append(_bytes_at(b, arr + 32 + o))
+    if not calls or calls[0][:4] != b"\xb8\x58\x18\x3f":
+        return None
+    p = calls[0][4:]
+    t = int.from_bytes(p[0:32], "big")
+    path = _bytes_at(p, t + int.from_bytes(p[t:t + 32], "big"))
+    to = hx(p[t + 44:t + 64])
+    amt_in = int.from_bytes(p[t + 64:t + 96], "big")
+    min_out = int.from_bytes(p[t + 96:t + 128], "big")
+    a, z = hx(path[:20]), hx(path[-20:])
+    eth_out = False
+    if to == ROUTER_THIS and len(calls) == 2 and calls[1][:4] == b"\x49\x40\x4b\x7c":
+        to, eth_out = hx(calls[1][4 + 44:4 + 64]), True
+    elif len(calls) != 1:
+        return None
+    pay = "%s ETH" % amount(tx["value"], 18) if tx["value"] else _amt(tx, a, amt_in)
+    get = "%s ETH" % amount(min_out, 18) if eth_out else _amt(tx, z, min_out)
+    return [("swap on Uniswap", INK), ("pay " + pay, INK), ("get at least", MUTED), (get, INK),
+            ("to this Safe", GREEN_D) if to == safe else ("to " + short(to) + "!", RED)]
+
+
+def _roles(tx, sel):
+    """Zodiac Roles (the daily budget): what each setting call does, or None."""
+    data = tx["data"]
+    if sel == "957ed2b3" and len(data) >= 4 + 32 * 7:      # assignRoles(module, keys[], memberOf[])
+        o = int.from_bytes(_arg(data, 2), "big")
+        on = data[4 + o + 32 + 31] == 1
+        return [("budget: %s key" % ("allow" if on else "drop"), INK if on else RED)] + \
+            _addr_lines("", _aarg(data, 0), INK if on else RED)[1:]
+    if sel == "610b5925" and len(data) == 36:               # enableModule(key)
+        return [("budget: allow key", INK)] + _addr_lines("", _aarg(data, 0))[1:]
+    if sel == "e009cfde" and len(data) == 68:               # disableModule(prev, key)
+        return [("budget: drop key", RED)] + _addr_lines("", _aarg(data, 1), RED)[1:]
+    t = _aarg(data, 1) if len(data) >= 68 else ""
+    what = _tok(tx, t)[0] or ("ETH sends" if t == MULTICALL3 else short(t))
+    if sel == "0c6c76b8" and len(data) == 68:               # scopeTarget(role, target)
+        return [("budget: may use", INK), (what, INK)]
+    if sel == "0172a43a" and len(data) == 68:               # revokeTarget(role, target)
+        return [("budget: no longer uses", INK), (what, INK)]
+    if sel == "7508dd98":                                   # scopeFunction(role, target, selector, ...)
+        return [("budget: rules for", INK), (what, INK)]
+    if sel == "a8ec43ee" and len(data) == 4 + 32 * 6:       # setAllowance(key, balance, max, refill, period, ts)
+        sym, dec = LIMITS.get(binascii.hexlify(_arg(data, 0)).decode(), ("", 0))
+        refill, per = int.from_bytes(_arg(data, 3), "big"), int.from_bytes(_arg(data, 4), "big")
+        when = "a day" if per == 86400 else "every %ds" % per
+        return [("budget: up to", INK), ("%s %s %s" % (amount(refill, dec), sym or "units", when), INK)]
+    if sel == "2916a9af":                                   # setTransactionUnwrapper
+        return [("budget: read batches", INK)]
+    return None
+
+
 def describe(tx):
     """What the transaction does, as (text, color) lines: at most 6."""
     data, to, safe = tx["data"], tx["to"], tx["safe"]
@@ -157,7 +290,7 @@ def describe(tx):
     if not data:
         out.append(("send %s ETH to" % amount(tx["value"], 18), INK))
         return out + _addr_lines("", to)[1:]
-    if tx["value"]:
+    if tx["value"] and to not in ROUTERS:
         out.append(("+ %s ETH" % amount(tx["value"], 18), RED))
     if to == safe and sel == "0d582f13" and len(data) == 68:
         return out + [("add owner", INK)] + _addr_lines("", _aarg(data, 0))[1:] + \
@@ -170,6 +303,45 @@ def describe(tx):
             _addr_lines("", _aarg(data, 2))[1:]
     if to == safe and sel == "694e80c3" and len(data) == 36:
         return out + [("change: %d signer(s) needed" % int.from_bytes(_arg(data, 0), "big"), INK)]
+    if to == safe and sel == "610b5925" and len(data) == 36:
+        m = _aarg(data, 0)
+        return out + [("turn on module", INK if m in MODULES else RED)] + \
+            ([(MODULES[m], INK)] if m in MODULES else _addr_lines("", m, RED)[1:])
+    if to == safe and sel == "e009cfde" and len(data) == 68:
+        m = _aarg(data, 1)
+        return out + [("turn off module", RED)] + ([(MODULES[m], RED)] if m in MODULES else _addr_lines("", m, RED)[1:])
+    if to == RECOVERY and sel == "be0e54d7" and len(data) == 68:
+        return out + [("recovery: add guardian", INK)] + _addr_lines("", _aarg(data, 0))[1:] + \
+            [("it can replace your keys", MUTED), ("after a 7-day wait", MUTED)]
+    if to == RECOVERY and sel == "936f7d86" and len(data) == 100:
+        return out + [("recovery: drop guardian", RED)] + _addr_lines("", _aarg(data, 1), RED)[1:]
+    if to == RECOVERY and sel == "0ba234d6" and len(data) == 4:
+        return out + [("cancel a recovery", INK)]
+    if to == PASSKEY_FACTORY and sel == "0d2f0489":
+        return out + [("make a passkey signer", INK), ("(changes nothing yet)", MUTED)]
+    if to == MODULE_FACTORY and sel == "f1ab873c" and _aarg(data, 0) == ROLES_COPY:
+        return out + [("set up a daily budget", INK), ("(Zodiac Roles)", MUTED)]
+    if sel == "095ea7b3" and len(data) == 68:
+        sp, n = _aarg(data, 0), int.from_bytes(_arg(data, 1), "big")
+        if not n:
+            return out + [("allowance back to 0", INK), ("for " + _name(sp, safe), INK)]
+        c = INK if sp in ROUTERS else RED
+        return out + [("let " + _name(sp, safe) + " take", c), (_amt(tx, to, n), c)]
+    if to in UNISWAP and sel == "5ae401dc":
+        try:
+            u = _uniswap(tx)
+        except Exception:
+            u = None
+        if u:
+            return out + u
+    if to in ROUTERS:
+        mine = binascii.unhexlify(safe[2:]) in data
+        return out + [("swap via " + ROUTERS[to], INK)] + \
+            ([("pay %s ETH" % amount(tx["value"], 18), INK)] if tx["value"] else []) + \
+            [("pays this Safe", GREEN_D) if mine else ("doesn't pay this Safe!", RED)]
+    r = _roles(tx, sel) if to != safe else None
+    if r:
+        return out + r
     if sel == "a9059cbb" and len(data) == 68:
         tok = TOKENS.get((tx["chainId"], to))
         n = int.from_bytes(_arg(data, 1), "big")
@@ -336,8 +508,10 @@ def handle(m):
     if t == "safe_sign":
         on_sign(mid, m.get("tx"))
         dirty = True
+    elif t == "safe_data":
+        on_data(mid, m)
     elif t == "hello":
-        W.send(W.hello(mid, running="safe", app=FW, safe=key))
+        W.send(W.hello(mid, running="safe", app=FW, safe=key, safe_chunk=CHUNK))
     else:                               # hello's cousins, shots, jobs, open: the slot's
         import slot
         slot.handle(m)
@@ -390,7 +564,7 @@ def run():
     _poll = select.poll()
     _poll.register(sys.stdin, select.POLLIN)
     key = save.load("key", None)
-    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key))
+    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key, safe_chunk=CHUNK))
     while True:
         for k in keys.pressed():
             if k == "A" and not key:
