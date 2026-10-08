@@ -16,7 +16,8 @@
 #   -> {"id":1,"type":"safe_sig","safeTxHash":"0x..","x":"0x..","y":"0x..","r":"0x..","s":"0x..",
 #       "authenticatorData":"0x..","clientDataFields":"\"origin\":\"https://wedgie.dev\""}
 #   -> {"id":1,"type":"refused"} (Y, or no answer in 2 minutes) or {"type":"error","error":".."}
-#   hello answers also carry "safe": {"x","y"} (or null: no key yet).
+#   hello answers also carry "safe": {"x","y"} (or null: no key yet) and "signer": its Safe owner address
+#   (safe_addr.py; the home screen shows it, wedgie.dev/safe checks it against its own).
 import sys, select, json, time, gc, binascii, hashlib
 import lcd as L
 import wedgie as W
@@ -24,7 +25,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-2"
+FW = "safe-3"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -48,6 +49,9 @@ TOKENS = {
     (8453, "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"): ("DAI", 18),
     (8453, "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2"): ("USDT", 6),
     (84532, "0x036cbd53842c5426634e7929541ec2318f3dcf7e"): ("USDC", 6),
+    (10, "0x0b2c639c533813f4aa9d7837caf62653d097ff85"): ("USDC", 6),
+    (42161, "0xaf88d065e77c8cc2239327c5edb3a432268e5831"): ("USDC", 6),
+    (11155111, "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238"): ("USDC", 6),
 }
 
 # contracts with a name: the same address on every chain unless the chain is in the key.
@@ -80,6 +84,7 @@ d = None
 keys = None
 _poll = None
 key = None          # {"x": "0x..", "y": "0x.."} or None
+signer = None       # its Safe owner address, "0x.." checksummed (safe_addr.py), or None
 note = ""           # one line under the home screen (the last thing that happened)
 dirty = True
 
@@ -280,6 +285,13 @@ def _roles(tx, sel):
     return None
 
 
+def _me(what, a, c):
+    """'add owner' / 'remove owner', saying so when the owner is this wedgie."""
+    if signer and a == signer.lower():
+        return (what + ": THIS wedgie", c)
+    return (what, c)
+
+
 def describe(tx):
     """What the transaction does, as (text, color) lines: at most 6."""
     data, to, safe = tx["data"], tx["to"], tx["safe"]
@@ -293,10 +305,10 @@ def describe(tx):
     if tx["value"] and to not in ROUTERS:
         out.append(("+ %s ETH" % amount(tx["value"], 18), RED))
     if to == safe and sel == "0d582f13" and len(data) == 68:
-        return out + [("add owner", INK)] + _addr_lines("", _aarg(data, 0))[1:] + \
+        return out + [_me("add owner", _aarg(data, 0), INK)] + _addr_lines("", _aarg(data, 0))[1:] + \
             [("then %d signer(s) needed" % int.from_bytes(_arg(data, 1), "big"), INK)]
     if to == safe and sel == "f8dc5dd9" and len(data) == 100:
-        return out + [("remove owner", RED)] + _addr_lines("", _aarg(data, 1), RED)[1:] + \
+        return out + [_me("remove owner", _aarg(data, 1), RED)] + _addr_lines("", _aarg(data, 1), RED)[1:] + \
             [("then %d signer(s) needed" % int.from_bytes(_arg(data, 2), "big"), INK)]
     if to == safe and sel == "e318b52b" and len(data) == 100:
         return out + [("swap owner", RED), (_aarg(data, 1)[:22] + "..", RED), ("for", MUTED)] + \
@@ -399,8 +411,30 @@ def make_key():
         pub = c.genkey(o.KEY2)                  # 65 bytes: 04 X Y
         key = {"x": hx(pub[1:33]), "y": hx(pub[33:65])}
         save.store("key", key)
+        save.delete("signer")                   # a new key, a new address
     finally:
         _unload()
+    find_signer()
+
+
+def find_signer():
+    """Its Safe owner address, worked out once per key (two keccaks in plain Python) and saved."""
+    global signer
+    if not key:
+        signer = None
+        return
+    s = save.load("signer", None)
+    if s and s.get("x") == key["x"]:
+        signer = s["address"]
+        return
+    ui.progress("Finding your address", "Safe owner", False)
+    import safe_addr
+    try:
+        signer = safe_addr.address(unhex(key["x"]), unhex(key["y"]))
+    finally:
+        del sys.modules["safe_addr"]
+        gc.collect()
+    save.store("signer", {"x": key["x"], "address": signer})
 
 
 def sign(digest):
@@ -418,7 +452,8 @@ def draw_home():
     ui.band(d)
     y = ui.title(d, "Safe signer", 48) + 14
     if key:
-        lines = [("your key", MUTED), (key["x"][:22], INK), (key["x"][22:44], INK), (key["x"][44:], INK)]
+        lines = _addr_lines("your Safe owner address", signer) + [("same on every chain", MUTED)] if signer \
+            else [("your key", MUTED), (key["x"][:22], INK), (key["x"][22:44], INK), (key["x"][44:], INK)]
         lines += [("", INK), ("waiting for a Safe tx", GREEN_D)]
     else:
         lines = [("No key yet.", INK), ("The chip makes one and", MUTED), ("never lets it out.", MUTED)]
@@ -511,7 +546,7 @@ def handle(m):
     elif t == "safe_data":
         on_data(mid, m)
     elif t == "hello":
-        W.send(W.hello(mid, running="safe", app=FW, safe=key, safe_chunk=CHUNK))
+        W.send(W.hello(mid, running="safe", app=FW, safe=key, signer=signer, safe_chunk=CHUNK))
     else:                               # hello's cousins, shots, jobs, open: the slot's
         import slot
         slot.handle(m)
@@ -564,7 +599,11 @@ def run():
     _poll = select.poll()
     _poll.register(sys.stdin, select.POLLIN)
     key = save.load("key", None)
-    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key, safe_chunk=CHUNK))
+    try:
+        find_signer()
+    except Exception as e:              # the address is for the screen; signing works without it
+        sys.print_exception(e)
+    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key, signer=signer, safe_chunk=CHUNK))
     while True:
         for k in keys.pressed():
             if k == "A" and not key:

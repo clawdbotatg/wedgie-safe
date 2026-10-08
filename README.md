@@ -6,9 +6,12 @@ that lives in the wedgie's OPTIGA Trust M chip.
 - **The key.** First start: press A, and the chip makes a P-256 key in its key slot 2. It never leaves
   the chip. This replaces anything already in that slot. The public key is kept in `/saves/safe/key`.
 - **On chain.** The key becomes a Safe owner through Safe's passkey signer
-  (`SafeWebAuthnSignerFactory.createSigner(x, y, verifiers)`, safe-modules passkey v0.2.1). Add that
-  signer's address as an owner of your Safe. Needs a chain with the P-256 precompile (Base, Optimism,
-  Arbitrum, Ethereum).
+  (`SafeWebAuthnSignerFactory.createSigner(x, y, verifiers)`, safe-modules passkey v0.2.1). That signer's
+  address is the wedgie's Safe owner address, the same on every chain: the home screen shows it
+  (`safe_addr.py` works it out, once per key), and [wedgie.dev/safe](https://wedgie.dev/safe) shows the
+  same one. Needs a chain with the P-256 precompile (Base, Optimism, Arbitrum, Ethereum).
+- **wedgie.dev/safe** makes a new Safe with the wedgie as an owner, adds it to a Safe you already own
+  (from a browser wallet that is an owner), and signs and executes transactions.
 - **Signing.** The computer sends the transaction's fields. The wedgie works out the Safe tx hash
   itself, shows what the transaction does (to, amount, owner changes, a red line for anything it can't
   read), and signs only when you press A on it. Y, or no answer in 2 minutes, is a no.
@@ -30,7 +33,8 @@ One JSON line each way. Anything else goes to the wedgie firmware as usual.
 -> {"id":1,"type":"refused"}
 ```
 
-`hello` also returns `"safe": {"x", "y"}` (null before the key is made) and `"safe_chunk": 4000`.
+`hello` also returns `"safe": {"x", "y"}` (null before the key is made), `"signer"` (its Safe owner
+address, as the home screen shows it) and `"safe_chunk": 4000`.
 
 A USB line is at most 6 KB. A bigger transaction (a bridge swap's calldata) sends its data ahead in
 pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`:
@@ -55,5 +59,6 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
 ## Saves
 
 - `key`: the public key (x, y). Delete it only if you mean to make a new key: the old one is gone.
+- `signer`: the Safe owner address worked out from `key` (made again if it's missing).
 
 MIT
