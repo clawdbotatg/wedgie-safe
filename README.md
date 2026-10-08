@@ -15,6 +15,11 @@ that lives in the wedgie's OPTIGA Trust M chip.
 - **Signing.** The computer sends the transaction's fields. The wedgie works out the Safe tx hash
   itself, shows what the transaction does (to, amount, owner changes, a red line for anything it can't
   read), and signs only when you press A on it. Y, or no answer in 2 minutes, is a no.
+  Amounts are big; every address is shown in full with its blockie beside it (the same 8x8 pattern
+  wallets draw, `safe_blockie.py`; colors are the nearest of the wedgie's 16). The first page shows a
+  blockie of the Safe tx hash: Instant Wallet's phone draws the same one, so a send started on the phone
+  and finished on a computer can be checked for a swap. Instant Wallet's settings read in plain words
+  (daily limit, fee cap, the USDC fee rule, "the Instant relay"); a rule it can't read is red.
 
 ## Controls
 
