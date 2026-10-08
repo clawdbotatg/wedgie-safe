@@ -36,6 +36,16 @@ One JSON line each way. Anything else goes to the wedgie firmware as usual.
 `hello` also returns `"safe": {"x", "y"}` (null before the key is made), `"signer"` (its Safe owner
 address, as the home screen shows it) and `"safe_chunk": 4000`.
 
+The wedgie keeps a list of its Safes (save `safes`, at most 32, newest first) so any computer can list
+them. Signing for a Safe adds it; a host that made or opened one adds it with `safe_note`:
+
+```
+{"id":5,"type":"safe_list"}                                   -> {"id":5,"type":"safe_list","safes":["8453:0x..", ...]}
+{"id":6,"type":"safe_note","chainId":8453,"safe":"0x.."}      -> {"id":6,"type":"ok","safes":3}
+```
+
+It's only a list of addresses: wedgie.dev/safe checks on chain that the wedgie is an owner before showing one.
+
 A USB line is at most 6 KB. A bigger transaction (a bridge swap's calldata) sends its data ahead in
 pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`:
 
@@ -45,7 +55,7 @@ pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`
 {"id":4,"type":"safe_sign","tx":{..., "data":"@"}}
 ```
 
-`at` = bytes sent so far (0 starts over). At most 12000 bytes of data (more answers `too big`: joining
+`at` = bytes sent so far (0 starts over). At most 8000 bytes of data (more answers `too big`: joining
 the pieces needs one block that size, and a used RP2040 heap doesn't always have a bigger one). The wedgie hashes what it was given, so the host still checks
 the `safeTxHash` it gets back.
 
@@ -61,5 +71,6 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
 
 - `key`: the public key (x, y). Delete it only if you mean to make a new key: the old one is gone.
 - `signer`: the Safe owner address worked out from `key` (made again if it's missing).
+- `safes`: the Safes it's in (`"<chainId>:<address>"`), for wedgie.dev/safe's list. Making a new key clears it.
 
 MIT
