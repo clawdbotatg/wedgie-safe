@@ -1,10 +1,12 @@
 # Safe Signer
 
 A [wedgie](https://wedgie.dev) app: sign [Safe{Wallet}](https://app.safe.global) transactions with a key
-that lives in the wedgie's OPTIGA Trust M chip.
+that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
 
-- **The key.** First start: press A, and the chip makes a P-256 key in its key slot 2. It never leaves
-  the chip. This replaces anything already in that slot. The public key is kept in `/saves/safe/key`.
+- **The key.** First start: press A, and the chip makes a P-256 key: a Trust M in its key slot 2, an
+  ATECC608 in slot 0. It never leaves the chip. This replaces anything already in that slot. An ATECC608
+  fresh from the factory must first have its config written and locked, which is permanent: the question
+  says so, and A does it. The public key, and which chip holds it, are kept in `/saves/safe/key`.
 - **On chain.** The key becomes a Safe owner through Safe's passkey signer
   (`SafeWebAuthnSignerFactory.createSigner(x, y, verifiers)`, safe-modules passkey v0.2.1). That signer's
   address is the wedgie's Safe owner address, the same on every chain: the home screen shows it
@@ -38,7 +40,7 @@ One JSON line each way. Anything else goes to the wedgie firmware as usual.
 -> {"id":1,"type":"refused"}
 ```
 
-`hello` also returns `"safe": {"x", "y"}` (null before the key is made), `"signer"` (its Safe owner
+`hello` also returns `"safe": {"x", "y", "chip"}` (null before the key is made), `"signer"` (its Safe owner
 address, as the home screen shows it) and `"safe_chunk": 4000`.
 
 The wedgie keeps a list of its Safes (save `safes`, at most 32, newest first) so any computer can list
@@ -74,7 +76,7 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
 
 ## Saves
 
-- `key`: the public key (x, y). Delete it only if you mean to make a new key: the old one is gone.
+- `key`: the public key (x, y) and its chip (`"ATECC608"` or `"OPTIGA Trust M"`; none = a Trust M). Delete it only if you mean to make a new key: the old one is gone.
 - `signer`: the Safe owner address worked out from `key` (made again if it's missing).
 - `safes`: the Safes it's in (`"<chainId>:<address>"`), for wedgie.dev/safe's list. Making a new key clears it.
 
