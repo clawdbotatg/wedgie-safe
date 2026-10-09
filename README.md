@@ -1,4 +1,4 @@
-# Safe signer
+# Safe Signer
 
 A [wedgie](https://wedgie.dev) app: sign [Safe{Wallet}](https://app.safe.global) transactions with a key
 that lives in the wedgie's OPTIGA Trust M chip.
