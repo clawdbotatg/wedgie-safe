@@ -33,7 +33,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-10"
+FW = "safe-11"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -74,6 +74,9 @@ MODULE_FACTORY = "0x000000000000addb49795b0f9ba5bc298cdda236"   # Zodiac ModuleP
 ROLES_COPY = "0xf2964ce6161ce0e75964fe7927ce114cb0b283d5"       # Zodiac Roles 2.1.1
 MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"       # the budget sends ETH through it
 MODULES = {RECOVERY: "7-day recovery"}
+# the Roles calls the limit pages read (assignRoles, enableModule, disableModule, scopeTarget, revokeTarget,
+# scopeFunction, setAllowance, setTransactionUnwrapper)
+ROLES_SELS = ("957ed2b3", "610b5925", "e009cfde", "0c6c76b8", "0172a43a", "7508dd98", "a8ec43ee", "2916a9af")
 # Roles allowance keys Instant Wallet uses (keccak of the name): what they count
 K_USDC = "8cf0b93cd9d3e32167f8de799f8e55df33697bb155a46b384f39bd78e75879b5"   # instant-wallet.burner.usdc
 K_ETH = "45cc4838df5ba19e2e80bafaf996e5acf9194b3706f31dfa92fdfb8cc4fd3017"    # instant-wallet.burner.eth
@@ -170,6 +173,20 @@ def hx(b):
 # needs 2x, once.
 pieces = []             # a big tx's data, sent ahead in safe_data lines (bytes, one per piece)
 have = 0                # bytes of it so far
+# The join needs one free block of up to MAX_DATA, and any code change moves what's left of a used heap (a
+# change to the screens alone made 8 KB fail every run). So the first piece takes that block, before the
+# pieces scatter the heap, and parse frees it just before the join, which then lands in it.
+room = None
+
+
+def hold():
+    global room
+    if room is None:
+        gc.collect()
+        try:
+            room = bytearray(MAX_DATA + 64)
+        except MemoryError:
+            pass
 
 
 def on_data(mid, m):
@@ -178,6 +195,7 @@ def on_data(mid, m):
     at, h = m.get("at"), str(m.get("hex") or "")
     if at == 0:
         pieces, have = [], 0
+        hold()
     if have + len(h) // 2 > MAX_DATA:
         pieces, have = [], 0
         W.send({"id": mid, "type": "error", "error": "too big: a wedgie takes up to %d bytes of tx data" % MAX_DATA})
@@ -200,7 +218,8 @@ def on_data(mid, m):
 
 def parse(t):
     """The fields, checked and normalized. Raises ValueError on anything off. data "@" = the pieces sent ahead."""
-    global pieces, have
+    global pieces, have, room
+    room = None
     data = t.get("data") or "0x"
     if data == "@":
         gc.collect()
@@ -309,6 +328,21 @@ def _bytes_at(data, off):
     return data[off + 32:off + 32 + n]
 
 
+def _lifi_to(data, safe):
+    """Who a LI.FI call pays. 0: this Safe, here (a swap: its receiver is argument 3). A chain id: this Safe on that
+    chain (a bridge: BridgeData's receiver and destinationChainId). None: anyone else, or it can't tell."""
+    if len(data) >= 4 + 32 * 5 and _aarg(data, 3) == safe:
+        return 0
+    try:
+        o = 4 + int.from_bytes(_arg(data, 0), "big")
+        if o + 256 <= len(data) and hx(data[o + 172:o + 192]) == safe:
+            far = int.from_bytes(data[o + 224:o + 256], "big")
+            return far if far >> 32 == 0 else None
+    except Exception:
+        pass
+    return None
+
+
 def _uniswap(tx):
     """SwapRouter02 multicall(deadline, [exactInput, unwrapWETH9?]) as (title, lines), or None."""
     data, safe = tx["data"], tx["safe"]
@@ -337,6 +371,26 @@ def _uniswap(tx):
     get = "%s ETH" % amount(min_out, 18) if eth_out else _amt(tx, z, min_out)
     return "Swap", [("pay", MUTED), (pay, INK, BIG), ("get at least", MUTED), (get, INK, BIG),
                     ("to this Safe", GREEN_D) if to == safe else ("to " + short(to) + "!", RED)]
+
+
+_roles_of = {}          # safe -> its Roles address (the keccaks are slow in plain Python: once each)
+
+
+def _init(safe):
+    """Roles.setUp(abi.encode(safe, safe, safe)): how Instant Wallet makes a Safe's own daily limit."""
+    return binascii.unhexlify("a4f9edbf") + word(32) + word(96) + aword(safe) * 3
+
+
+def roles_of(safe):
+    """The address of this Safe's own daily limit (Zodiac Roles, CREATE2 by the ModuleProxyFactory, salt
+    keccak(keccak(init), 0)): the limit pages say "Daily limit" only for calls to it."""
+    if safe not in _roles_of:
+        from safe_keccak import keccak256 as k
+        code = binascii.unhexlify("602d8060093d393df3363d3d373d3d3d363d73") + unhex(ROLES_COPY) + \
+            binascii.unhexlify("5af43d82803e903d91602b57fd5bf3")
+        h = k(b"\xff" + unhex(MODULE_FACTORY) + k(k(_init(safe)) + word(0)) + k(code))
+        _roles_of[safe] = hx(h[12:])
+    return _roles_of[safe]
 
 
 def _roles(tx, sel):
@@ -424,8 +478,8 @@ def describe(tx):
     data, to, safe = tx["data"], tx["to"], tx["safe"]
     sel = binascii.hexlify(data[:4]).decode() if len(data) >= 4 else ""
     out = []
-    if tx["operation"] == 1:
-        out.append(("DELEGATECALL: can do anything", RED))
+    if tx["operation"] == 1:            # (a MultiSend batch never gets here: confirm reads its actions)
+        return "Danger", [("can take all", RED, BIG)] + _addr_lines("", to, RED)[1:]
     if not data:
         return "Send", out + [("%s ETH" % amount(tx["value"], 18), INK, BIG)] + _who(to, safe)
     if tx["value"] and to not in ROUTERS:
@@ -441,11 +495,14 @@ def describe(tx):
         return "Must sign", out + [("%d" % int.from_bytes(_arg(data, 0), "big"), INK, BIG)]
     if to == safe and sel == "610b5925" and len(data) == 36:
         m = _aarg(data, 0)
+        if m == roles_of(safe):
+            return "Turn on", out + [("Daily limit", INK, BIG)]
         return "Turn on", out + ([(MODULES[m], INK)] if m in MODULES else
                                  [("can move any money", RED)] + _addr_lines("", m, RED)[1:])
     if to == safe and sel == "e009cfde" and len(data) == 68:
         m = _aarg(data, 1)
-        return "Turn off", out + ([(MODULES[m], RED)] if m in MODULES else _addr_lines("", m, RED)[1:])
+        return "Turn off", out + ([("Daily limit" if m == roles_of(safe) else MODULES[m], RED)] if m in MODULES or
+                                  m == roles_of(safe) else _addr_lines("", m, RED)[1:])
     if to == RECOVERY and sel == "be0e54d7" and len(data) == 68:
         return "Add helper", out + _addr_lines("", _aarg(data, 0))[1:] + [("can swap owners", MUTED), ("after 7 days", MUTED)]
     if to == RECOVERY and sel == "936f7d86" and len(data) == 100:
@@ -454,14 +511,18 @@ def describe(tx):
         return "Cancel recovery", out
     if to == PASSKEY_FACTORY and sel == "0d2f0489":
         return "Make a key", out + [("not an owner yet", MUTED)]
-    if to == MODULE_FACTORY and sel == "f1ab873c" and _aarg(data, 0) == ROLES_COPY:
+    if to == MODULE_FACTORY and sel == "f1ab873c" and _aarg(data, 0) == ROLES_COPY and len(data) >= 100 and \
+            not int.from_bytes(_arg(data, 2), "big") and _bytes_at(data[4:], int.from_bytes(_arg(data, 1), "big")) == _init(safe):
         return "Daily limit", out + [("set it up", INK)]
     if sel == "095ea7b3" and len(data) == 68:
         sp, n = _aarg(data, 0), int.from_bytes(_arg(data, 1), "big")
         c = INK if not n or sp in ROUTERS else RED
         if not n:
             return "Stop spending", out + [(_name(sp, safe), INK), ("can't take any", INK)]
-        return "Allow", out + [(_name(sp, safe) + " may take", c), (_amt(tx, to, n), c, BIG)]
+        if n >> 128:                    # "unlimited": every one of them, now and later
+            c = RED
+        who = [("by " + ROUTERS[sp], c)] if sp in ROUTERS else [("by", c)] + _addr_lines("", sp, c)[1:]
+        return "Allow taking", out + [("ALL " + (_tok(tx, to)[0] or "of it") if n >> 128 else _amt(tx, to, n), c, BIG)] + who
     if to in UNISWAP and sel == "5ae401dc":
         try:
             u = _uniswap(tx)
@@ -470,11 +531,13 @@ def describe(tx):
         if u:
             return u[0], out + u[1]
     if to in ROUTERS:
-        mine = binascii.unhexlify(safe[2:]) in data
-        return "Swap", out + [("via " + ROUTERS[to], INK)] + \
+        far = _lifi_to(data, safe)
+        return ("Bridge" if far else "Swap"), out + [("via " + ROUTERS[to], INK)] + \
             ([("pay", MUTED), ("%s ETH" % amount(tx["value"], 18), INK, BIG)] if tx["value"] else []) + \
-            [("pays this Safe", GREEN_D) if mine else ("doesn't pay this Safe!", RED)]
-    r = _roles(tx, sel) if to != safe else None
+            ([("to this Safe", GREEN_D)] if far == 0 else
+             [("to this Safe on", INK), (CHAINS.get(far, "chain %d" % far), INK, BIG)] if far else
+             [("can't tell who gets it", RED)])
+    r = _roles(tx, sel) if sel in ROLES_SELS and to == roles_of(safe) else None
     if r:
         return r[0], out + r[1]
     if sel == "a9059cbb" and len(data) == 68:
@@ -637,17 +700,23 @@ def draw_home():
     d.show()
 
 
-def _screen(head, lines, yes, k, foot=""):
+def _screen(head, lines, yes, k, foot="", safe=None):
     """One page of the question: the action big, its lines, which Safe small at the bottom. True on a
     real A, False on Y or no answer."""
     d.fill(WHITE)
     ui.band(d)
     ui.title(d, head, 42, 1)
-    _draw(lines, 68, 166, sum(_h(l, True) for l in lines) <= 98)    # the big blockie wherever it fits
-    if foot:
+    y = _draw(lines, 68, 166, sum(_h(l, True) for l in lines) <= 98)    # the big blockie wherever it fits
+    if safe:                            # which Safe: its blockie (bigger when there's room), chain, address
+        import safe_blockie
+        c = 3 if y <= 156 else 2
+        safe_blockie.draw(d, safe, 8, 182 - 8 * c, c, MUTED)
+        d.text(foot[:25], 16 + 8 * c, 170, MUTED)
+    elif foot:
         d.center_text(foot[:ui.COLS_SMALL], 170, MUTED)
     ui.buttons(d, yes, "no")
     d.show()
+    k.pressed()                         # a press made before this page was up doesn't answer it
     t0 = time.ticks_ms()
     while time.ticks_diff(time.ticks_ms(), t0) < ASK_MS:
         for kk in k.pressed():
@@ -659,11 +728,12 @@ def _screen(head, lines, yes, k, foot=""):
 
 def fold(acts):
     """A batch's pages, fewer of them: the USDC and ETH daily limits on one page, and the Instant relay's
-    fee (always the last action) a small line on the page before it."""
+    fee (always the last action), when it's at most 1 USDC, a small line on the page before it."""
     pages = []
     for a in acts:
         head, lines = describe(a)
-        if pages and head == "Fee" and lines[0][2:] == (BIG,):
+        if pages and head == "Fee" and lines[0][2:] == (BIG,) and _tok(a, a["to"])[0] == "USDC" and \
+                int.from_bytes(a["data"][36:68], "big") <= 1000000:
             pages[-1][1].append(("+ %s fee" % lines[0][0], MUTED))
         elif pages and head == pages[-1][0] == "Daily limit" and lines[1:] == pages[-1][1][1:]:
             pages[-1][1].insert(-1, lines[0])
@@ -676,22 +746,23 @@ def confirm(tx):
     """The transaction on the screen, a page per action in a batch. True only on A through every page."""
     k = L.Keys(physical=True)
     k.pressed()
-    foot = "%s  Safe %s" % (CHAINS.get(tx["chainId"], "chain %d" % tx["chainId"]), short(tx["safe"]))
+    sf = tx["safe"]
+    foot = "%s %s" % (CHAINS.get(tx["chainId"], "chain %d" % tx["chainId"]), short(tx["safe"]))
     tail = [("pays a gas refund", RED)] if tx["gasPrice"] else []
     acts = batch(tx)
     if acts is None:
         head, lines = describe(tx)
-        return _screen(head, lines + tail, "sign", k, foot)
+        return _screen(head, lines + tail, "sign", k, foot, sf)
     pages = fold(acts)
     n = len(pages)
     if n == 1:
-        return _screen(pages[0][0], pages[0][1] + tail, "sign", k, foot)
-    if not _screen("Bundle", [("%d steps" % n, INK, BIG)] + tail, "next", k, foot):
+        return _screen(pages[0][0], pages[0][1] + tail, "sign", k, foot, sf)
+    if not _screen("Bundle", [("%d steps" % n, INK, BIG)] + tail, "next", k, foot, sf):
         return False
     for i, (head, lines) in enumerate(pages):
         last = i == n - 1
         if not _screen(head, lines + (tail if last else []), "sign all" if last else "next", k,
-                       "%d/%d %s" % (i + 1, n, foot)):
+                       "%d/%d %s" % (i + 1, n, foot), sf):
             return False
     return True
 

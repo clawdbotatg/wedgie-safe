@@ -22,7 +22,13 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   blockie of the Safe tx hash: Instant Wallet's phone draws the same one, so a send started on the phone
   and finished on a computer can be checked for a swap. Every page is a few plain words. A bundle folds where it can:
   the USDC and ETH daily limits share a page, and the Instant relay's fee is a small line on the page
-  before it, so changing the daily limit is one page. Anything it can't read is red.
+  before it, so changing the daily limit is one page (a fee over 1 USDC keeps its own page). Anything it can't read is red.
+  Every page shows which Safe: its blockie, the chain, its address.
+- **What it won't take on trust.** A DELEGATECALL to anything but Safe's MultiSend is one red page, "can
+  take all", and nothing else about it. "Daily limit" pages only for this Safe's own Roles (its CREATE2
+  address, worked out on the wedgie); any other contract with the same calls is "Unknown". An unlimited
+  approval says "ALL USDC", red. A LI.FI swap or bridge is green only when its receiver is this Safe. A
+  button press made before a page is up doesn't answer it.
 
 ## Controls
 
