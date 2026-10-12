@@ -20,9 +20,11 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   Amounts are big; every address is shown in full with its blockie beside it (the same 8x8 pattern
   wallets draw, `safe_blockie.py`; colors are the nearest of the wedgie's 16). The first page shows a
   blockie of the Safe tx hash: Instant Wallet's phone draws the same one, so a send started on the phone
-  and finished on a computer can be checked for a swap. Every page is a few plain words. A bundle folds where it can:
-  the USDC and ETH daily limits share a page, and the Instant relay's fee is a small line on the page
-  before it, so changing the daily limit is one page (a fee over 1 USDC keeps its own page). Anything it can't read is red.
+  and finished on a computer can be checked for a swap. Every page is a few plain words, and every Instant Wallet action is one page: a send, an owner change,
+  a limit change, a swap (its exact approval folds in). The relay's fee (up to 1 USDC or 0.001 ETH) is a
+  small line on that page; a bigger one keeps its own page. First-time limit setup is two pages: the
+  amounts, then which key may spend them. Anything it can't read is red. The reading code (`safe_read.py`) loads only while a
+  question is up.
   Every page shows which Safe: its blockie, the chain, its address.
 - **What it won't take on trust.** A DELEGATECALL to anything but Safe's MultiSend is one red page, "can
   take all", and nothing else about it. "Daily limit" pages only for this Safe's own Roles (its CREATE2
