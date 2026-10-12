@@ -20,8 +20,9 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   Amounts are big; every address is shown in full with its blockie beside it (the same 8x8 pattern
   wallets draw, `safe_blockie.py`; colors are the nearest of the wedgie's 16). The first page shows a
   blockie of the Safe tx hash: Instant Wallet's phone draws the same one, so a send started on the phone
-  and finished on a computer can be checked for a swap. Instant Wallet's settings read in plain words
-  (daily limit, fee cap, the USDC fee rule, "the Instant relay"); a rule it can't read is red.
+  and finished on a computer can be checked for a swap. Every page is a few plain words. A bundle folds where it can:
+  the USDC and ETH daily limits share a page, and the Instant relay's fee is a small line on the page
+  before it, so changing the daily limit is one page. Anything it can't read is red.
 
 ## Controls
 

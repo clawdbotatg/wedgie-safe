@@ -33,7 +33,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-9"
+FW = "safe-10"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -79,9 +79,9 @@ K_USDC = "8cf0b93cd9d3e32167f8de799f8e55df33697bb155a46b384f39bd78e75879b5"   # 
 K_ETH = "45cc4838df5ba19e2e80bafaf996e5acf9194b3706f31dfa92fdfb8cc4fd3017"    # instant-wallet.burner.eth
 K_FEE = "e0a4e7171a966a6c2f8a346d61492f1479248405e8f190113096dd36aed44e2b"    # instant-wallet.burner.fee-usdc
 # what each allowance is: (what it's called, symbol, decimals, what it's for)
-LIMITS = {K_USDC: ("daily limit", "USDC", 6, "Face ID alone, a day"),
-          K_ETH: ("daily limit", "ETH", 18, "Face ID alone, a day"),
-          K_FEE: ("fee cap", "USDC", 6, "relay fees, a day")}
+LIMITS = {K_USDC: ("Daily limit", "USDC", 6, "a day with just Face ID"),
+          K_ETH: ("Daily limit", "ETH", 18, "a day with just Face ID"),
+          K_FEE: ("Fee limit", "USDC", 6, "a day for fees")}
 # Instant Wallet's relay: it sends the transactions and is paid a fee in the batch. Built in, never from the host.
 RELAY = "0x4cfab32186e65e2a39ec0e882e11380cbf2f8a2f"
 NAMES = {RELAY: "the Instant relay"}
@@ -345,34 +345,34 @@ def _roles(tx, sel):
     if sel == "957ed2b3" and len(data) >= 4 + 32 * 7:      # assignRoles(module, keys[], memberOf[])
         o = int.from_bytes(_arg(data, 2), "big")
         on = data[4 + o + 32 + 31] == 1
-        return "Budget", [("%s key" % ("allow" if on else "drop"), INK if on else RED)] + \
+        return "Daily limit", [("this key may spend" if on else "this key can't spend", INK if on else RED)] + \
             _addr_lines("", _aarg(data, 0), INK if on else RED)[1:]
     if sel == "610b5925" and len(data) == 36:               # enableModule(key)
-        return "Budget", [("allow key", INK)] + _addr_lines("", _aarg(data, 0))[1:]
+        return "Daily limit", [("turn it on", INK)] + _addr_lines("", _aarg(data, 0))[1:]
     if sel == "e009cfde" and len(data) == 68:               # disableModule(prev, key)
-        return "Budget", [("drop key", RED)] + _addr_lines("", _aarg(data, 1), RED)[1:]
+        return "Daily limit", [("turn it off", RED)] + _addr_lines("", _aarg(data, 1), RED)[1:]
     t = _aarg(data, 1) if len(data) >= 68 else ""
     what = _tok(tx, t)[0] or ("ETH sends" if t == MULTICALL3 else short(t))
     if sel == "0c6c76b8" and len(data) == 68:               # scopeTarget(role, target)
-        return "Budget", [("may use", MUTED), (what, INK, BIG)]
+        return "Daily limit", [("can spend", MUTED), (what, INK, BIG)]
     if sel == "0172a43a" and len(data) == 68:               # revokeTarget(role, target)
-        return "Budget", [("no longer uses", MUTED), (what, INK, BIG)]
+        return "Daily limit", [("can't spend", MUTED), (what, RED, BIG)]
     if sel == "7508dd98":                                   # scopeFunction(role, target, selector, conditions, options)
         try:
             r = _rule(data, t)
         except Exception:
             r = None
-        return "Budget", r or [("rule for", MUTED), (what, INK, BIG), ("it can't read the rule", RED)]
+        return r or ("Daily limit", [("rule for", MUTED), (what, INK, BIG), ("can't read it", RED)])
     if sel == "a8ec43ee" and len(data) == 4 + 32 * 6:       # setAllowance(key, balance, max, refill, period, ts)
         k = binascii.hexlify(_arg(data, 0)).decode()
         refill, per = int.from_bytes(_arg(data, 3), "big"), int.from_bytes(_arg(data, 4), "big")
         if k in LIMITS:
             name, sym, dec, why = LIMITS[k]
-            return name[0].upper() + name[1:], [("%s %s" % (amount(refill, dec), sym), INK, BIG),
+            return name, [("%s %s" % (amount(refill, dec), sym), INK, BIG),
                                                  (why if per == 86400 else "every %ds" % per, MUTED if per == 86400 else RED)]
-        return "Budget", [("up to", MUTED), ("%d units, unknown limit" % refill, RED)]
+        return "Daily limit", [("%d" % refill, RED, BIG), ("of what? can't tell", RED)]
     if sel == "2916a9af":                                   # setTransactionUnwrapper
-        return "Budget", [("read batches", INK)]
+        return "Daily limit", [("works in bundles", INK)]
     return None
 
 
@@ -394,15 +394,16 @@ def _rule(data, target):
     c = _conds(data)
     sel = binascii.hexlify(data[68:72]).decode()
     if sel == "a9059cbb" and c == [(0, 5, 5, ""), (0, 1, 0, ""), (0, 1, 28, K_USDC)]:
-        return [("USDC", INK, BIG), ("to anyone,", INK), ("up to the daily limit", INK)]
+        return "Daily limit", [("USDC", INK, BIG), ("to anyone", INK)]
     if sel == "a9059cbb" and len(c) == 7 and c[:3] == [(0, 0, 2, ""), (0, 5, 5, ""), (0, 5, 5, "")] and \
             c[3][:3] == (1, 1, 16) and len(c[3][3]) == 64 and c[4:] == [(1, 1, 28, K_FEE), (2, 1, 0, ""), (2, 1, 28, K_USDC)]:
         r = "0x" + c[3][3][24:]
-        return [("USDC", INK, BIG), ("fees up to the fee cap", INK)] + _addr_lines("to", r, INK if r in NAMES else RED) + \
-            [("others up to the daily limit", INK)]
+        if r == RELAY:
+            return "Fee limit", [("fees get", INK), ("their own limit", INK)]
+        return "Fee limit", [("fees to", RED)] + _addr_lines("", r, RED)[1:] + [("get their own limit", INK)]
     if target == MULTICALL3 and sel == "174dea71" and c == [(0, 5, 5, ""), (0, 4, 0, ""), (0, 0, 29, K_ETH), (1, 3, 0, ""),
                                                             (3, 1, 0, ""), (3, 1, 0, ""), (3, 1, 0, ""), (3, 2, 0, "")]:
-        return [("ETH", INK, BIG), ("to anyone,", INK), ("up to the daily limit", INK)]
+        return "Daily limit", [("ETH", INK, BIG), ("to anyone", INK)]
     return None
 
 
@@ -414,7 +415,7 @@ def _owner(a, c):
 
 
 def _then(n):
-    return ("%d signature%s needed" % (n, "" if n == 1 else "s"), INK)
+    return ("then %d must sign" % n, INK)
 
 
 def describe(tx):
@@ -435,29 +436,32 @@ def describe(tx):
     if to == safe and sel == "f8dc5dd9" and len(data) == 100:
         return "Remove owner", out + _owner(_aarg(data, 1), RED) + [_then(n2())]
     if to == safe and sel == "e318b52b" and len(data) == 100:
-        return "Swap owner", out + [(_aarg(data, 1)[:22] + "..", RED), ("for", MUTED)] + _addr_lines("", _aarg(data, 2))[1:]
+        return "Swap owner", out + [("out: " + short(_aarg(data, 1)), RED), ("in:", MUTED)] + _addr_lines("", _aarg(data, 2))[1:]
     if to == safe and sel == "694e80c3" and len(data) == 36:
-        return "Signers needed", out + [("%d" % int.from_bytes(_arg(data, 0), "big"), INK, BIG)]
+        return "Must sign", out + [("%d" % int.from_bytes(_arg(data, 0), "big"), INK, BIG)]
     if to == safe and sel == "610b5925" and len(data) == 36:
         m = _aarg(data, 0)
-        return "Turn on module", out + ([(MODULES[m], INK)] if m in MODULES else _addr_lines("", m, RED)[1:])
+        return "Turn on", out + ([(MODULES[m], INK)] if m in MODULES else
+                                 [("can move any money", RED)] + _addr_lines("", m, RED)[1:])
     if to == safe and sel == "e009cfde" and len(data) == 68:
         m = _aarg(data, 1)
-        return "Turn off module", out + ([(MODULES[m], RED)] if m in MODULES else _addr_lines("", m, RED)[1:])
+        return "Turn off", out + ([(MODULES[m], RED)] if m in MODULES else _addr_lines("", m, RED)[1:])
     if to == RECOVERY and sel == "be0e54d7" and len(data) == 68:
-        return "Add guardian", out + _addr_lines("", _aarg(data, 0))[1:] + [("can replace your keys", MUTED), ("after 7 days", MUTED)]
+        return "Add helper", out + _addr_lines("", _aarg(data, 0))[1:] + [("can swap owners", MUTED), ("after 7 days", MUTED)]
     if to == RECOVERY and sel == "936f7d86" and len(data) == 100:
-        return "Drop guardian", out + _addr_lines("", _aarg(data, 1), RED)[1:]
+        return "Drop helper", out + _addr_lines("", _aarg(data, 1), RED)[1:]
     if to == RECOVERY and sel == "0ba234d6" and len(data) == 4:
         return "Cancel recovery", out
     if to == PASSKEY_FACTORY and sel == "0d2f0489":
-        return "Passkey signer", out + [("changes nothing yet", MUTED)]
+        return "Make a key", out + [("not an owner yet", MUTED)]
     if to == MODULE_FACTORY and sel == "f1ab873c" and _aarg(data, 0) == ROLES_COPY:
-        return "Set up budget", out
+        return "Daily limit", out + [("set it up", INK)]
     if sel == "095ea7b3" and len(data) == 68:
         sp, n = _aarg(data, 0), int.from_bytes(_arg(data, 1), "big")
         c = INK if not n or sp in ROUTERS else RED
-        return "Approve", out + [(_amt(tx, to, n) if n else "0", c, BIG), ("for " + _name(sp, safe), c)]
+        if not n:
+            return "Stop spending", out + [(_name(sp, safe), INK), ("can't take any", INK)]
+        return "Allow", out + [(_name(sp, safe) + " may take", c), (_amt(tx, to, n), c, BIG)]
     if to in UNISWAP and sel == "5ae401dc":
         try:
             u = _uniswap(tx)
@@ -480,7 +484,7 @@ def describe(tx):
             return "Send", out + [("%d of token" % n, INK)] + _addr_lines("", to, RED)[1:] + _who(_aarg(data, 0), safe)
         r = _aarg(data, 0)
         return "Fee" if r == RELAY else "Send", out + [("%s %s" % (amount(n, tok[1]), tok[0]), INK, BIG)] + _who(r, safe)
-    return "Contract call", out + [("%s, %d bytes, on" % (sel, len(data)), RED)] + _addr_lines("", to, RED)[1:]
+    return "Unknown", out + [("can't read this", RED, BIG)] + _addr_lines("on", to, RED)
 
 
 def batch(tx):
@@ -653,6 +657,21 @@ def _screen(head, lines, yes, k, foot=""):
     return False
 
 
+def fold(acts):
+    """A batch's pages, fewer of them: the USDC and ETH daily limits on one page, and the Instant relay's
+    fee (always the last action) a small line on the page before it."""
+    pages = []
+    for a in acts:
+        head, lines = describe(a)
+        if pages and head == "Fee" and lines[0][2:] == (BIG,):
+            pages[-1][1].append(("+ %s fee" % lines[0][0], MUTED))
+        elif pages and head == pages[-1][0] == "Daily limit" and lines[1:] == pages[-1][1][1:]:
+            pages[-1][1].insert(-1, lines[0])
+        else:
+            pages.append((head, lines))
+    return pages
+
+
 def confirm(tx):
     """The transaction on the screen, a page per action in a batch. True only on A through every page."""
     k = L.Keys(physical=True)
@@ -663,12 +682,14 @@ def confirm(tx):
     if acts is None:
         head, lines = describe(tx)
         return _screen(head, lines + tail, "sign", k, foot)
-    n = len(acts)
-    if not _screen("Batch", [("%d actions" % n, INK, BIG)] + tail, "next", k, foot):
+    pages = fold(acts)
+    n = len(pages)
+    if n == 1:
+        return _screen(pages[0][0], pages[0][1] + tail, "sign", k, foot)
+    if not _screen("Bundle", [("%d steps" % n, INK, BIG)] + tail, "next", k, foot):
         return False
-    for i, a in enumerate(acts):
+    for i, (head, lines) in enumerate(pages):
         last = i == n - 1
-        head, lines = describe(a)
         if not _screen(head, lines + (tail if last else []), "sign all" if last else "next", k,
                        "%d/%d %s" % (i + 1, n, foot)):
             return False
