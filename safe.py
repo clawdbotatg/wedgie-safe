@@ -1,11 +1,13 @@
 # Safe Signer: the wedgie signs Safe{Wallet} transactions with a key that lives in its secure chip, an
 # ATECC608 or an OPTIGA Trust M (whichever it has).
 #
-# The key: made once, on the wedgie (A on its screen), in the Trust M's key slot 2 or the ATECC608's slot 0.
-# It never leaves the chip. An ATECC608 as shipped can't hold a key until its config is written and locked:
-# the question says so, and the yes locks it (for good; the old Wallet's table, atecc.CONFIG).
-# Its public key is saved (/saves/safe/key, with which chip) because the Trust M hands it out only when it
-# makes the key.
+# The key: made once, by the person, on the wedgie (A on its screen). It never leaves the chip.
+# A Trust M (safe_key.py): the key in slot KEY2 and its public key in DATA[11], both locked for good once
+# made, so nothing can ever replace or lose it. The chip is the only truth: every start reads the public key
+# from it and checks it with a fresh signature. A chip whose KEY2 is already locked and isn't ours: swap it.
+# An ATECC608 (slot 0): as shipped it can't hold a key until its config is written and locked (the question
+# says so, and the yes locks it for good; atecc.CONFIG); its public key is saved in /saves/safe/key. Its
+# slot isn't locked yet (no ATECC608 to try it on).
 # On chain the key is a passkey-style Safe owner: Safe's SafeWebAuthnSignerFactory makes a small signer
 # contract from (x, y), and that contract's address is added as an owner of the Safe.
 #
@@ -33,7 +35,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-12"
+FW = "safe-13"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -54,6 +56,7 @@ d = None
 keys = None
 _poll = None
 key = None          # {"x": "0x..", "y": "0x..", "chip": "ATECC608" | "OPTIGA Trust M"} or None (no chip: a Trust M)
+state = "none"      # "ok" signs; "none" no key yet; "lock" a key from before locking; "swap" not ours (safe_key)
 signer = None       # its Safe owner address, "0x.." checksummed (safe_addr.py), or None
 note = ""           # one line under the home screen (the last thing that happened)
 dirty = True
@@ -272,7 +275,7 @@ def key_question():
     try:
         a = _atecc()
         if not a:
-            return ["Replaces chip key slot 2."]
+            return ["Your own key, made in", "the chip and locked", "for good. Can't undo."]
         if not a.lock_state()["configLocked"]:
             return ["Locks the chip for good.", "Can't undo."]
         return ["Replaces chip key slot 0."]
@@ -282,27 +285,63 @@ def key_question():
         _unload()
 
 
+def key_module():
+    """safe_key.py (a Trust M key's start, make and lock), loaded only for those."""
+    import safe_key
+    return safe_key
+
+
+def drop_key_module():
+    if "safe_key" in sys.modules:
+        del sys.modules["safe_key"]
+    _unload()
+
+
 def make_key():
-    global key
-    ui.progress("Making your key", "in the chip", False)
+    global key, state
     try:
         a = _atecc()
         if a:
+            ui.progress("Making your key", "in the chip", False)
             if not a.lock_state()["configLocked"]:
                 a.write_config()                # checked byte for byte, then locked: permanent
                 a.lock_config()
             x, y = a.genkey_new(0)
             key = {"x": "0x%064x" % x, "y": "0x%064x" % y, "chip": "ATECC608"}
+            save.store("key", key)
         else:
-            import optiga
-            pub = optiga.Chip().genkey(optiga.KEY2)     # 65 bytes: 04 X Y
-            key = {"x": hx(pub[1:33]), "y": hx(pub[33:65]), "chip": "OPTIGA Trust M"}
-        save.store("key", key)
-        save.delete("signer")                   # a new key, a new address
-        save.delete("safes")                    # and none of the old key's Safes
+            key = key_module().make()
+            save.delete("key")                  # a Trust M keeps it itself
     finally:
-        _unload()
+        drop_key_module()
+    state = "ok"
+    save.delete("signer")                       # a new key, a new address
+    save.delete("safes")                        # and none of the old key's Safes
     find_signer()
+
+
+def lock_key():
+    """A key from before locking, kept for good (the person said it's theirs)."""
+    global state
+    try:
+        key_module().lock(key)
+    finally:
+        drop_key_module()
+    state = "ok"
+    save.delete("key")
+
+
+def load_key():
+    """key and state from the chip (a Trust M), or from the save (an ATECC608)."""
+    global key, state
+    saved = save.load("key", None)
+    if saved and saved.get("chip") == "ATECC608":
+        key, state = saved, "ok"
+        return
+    try:
+        state, key = key_module().start(saved)
+    finally:
+        drop_key_module()
 
 
 def find_signer():
@@ -348,19 +387,25 @@ def draw_home():
     d.fill(WHITE)
     ui.band(d)
     ui.title(d, "Safe Signer", 42, 1)
-    if key and signer:
+    if state == "ok" and signer:
         import safe_blockie
         safe_blockie.draw(d, signer, 84, 70, 9, MUTED)
         for i in range(3):
             d.center_text(signer[i * 14:i * 14 + 14], 154 + i * 22, INK, 2)
-    elif key:
+    elif state == "ok":
         _draw([(key["x"][:22], INK), (key["x"][22:44], INK), (key["x"][44:], INK)], 80, 220)
+    elif state == "lock":
+        _draw([("Not locked", RED, BIG), ("A key from before.", INK), ("Lock it to keep it.", INK)], 80, 180)
+    elif state == "swap":
+        _draw([("Swap the chip", RED, BIG), ("Its key is locked and", INK), ("isn't Safe Signer's.", INK)], 80, 180)
     else:
         _draw([("No key", INK, BIG)], 90, 180)
     if note:
-        d.center_text(note[:ui.COLS_SMALL], 226 if key else 170, MUTED)
-    if not key:
+        d.center_text(note[:ui.COLS_SMALL], 226 if state == "ok" else 170, MUTED)
+    if state == "none":
         ui.buttons(d, "make a key", "not now")
+    elif state == "lock":
+        ui.buttons(d, "lock it", "not now")
     d.show()
 
 
@@ -418,8 +463,10 @@ def confirm(tx):
 
 def on_sign(mid, t):
     global note
-    if not key:
-        W.send({"id": mid, "type": "error", "error": "no key yet: press A on the wedgie to make one"})
+    if state != "ok":
+        W.send({"id": mid, "type": "error", "error": {"lock": "key not locked yet: press A on the wedgie",
+                "swap": "this chip's key is locked and isn't Safe Signer's: swap the chip"}.get(state,
+                "no key yet: press A on the wedgie to make one")})
         return
     try:
         tx = parse(t or {})
@@ -477,7 +524,8 @@ def handle(m):
             return
         W.send({"id": mid, "type": "ok", "safes": n})
     elif t == "hello":
-        W.send(W.hello(mid, running="safe", app=FW, safe=key, signer=signer, safe_chunk=CHUNK))
+        W.send(W.hello(mid, running="safe", app=FW, safe=key if state == "ok" else None, signer=signer if state == "ok" else None,
+                       safe_state=state, safe_chunk=CHUNK))
     else:                               # hello's cousins, shots, jobs, open: the slot's
         import slot
         slot.handle(m)
@@ -524,20 +572,41 @@ def pump():
 
 
 def run():
-    global d, keys, _poll, key, dirty, note
+    global d, keys, _poll, key, state, dirty, note
     d = L.LCD()
     keys = L.Keys(physical=True)
     _poll = select.poll()
     _poll.register(sys.stdin, select.POLLIN)
-    key = save.load("key", None)
+    try:
+        load_key()
+    except Exception as e:              # no chip answered: no key (making one says what's wrong)
+        sys.print_exception(e)
+        key, state = None, "none"
     try:
         find_signer()
     except Exception as e:              # the address is for the screen; signing works without it
         sys.print_exception(e)
-    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key, signer=signer, safe_chunk=CHUNK))
+    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key if state == "ok" else None,
+                   signer=signer if state == "ok" else None, safe_state=state, safe_chunk=CHUNK))
     while True:
         for k in keys.pressed():
-            if k == "A" and not key:
+            if k == "A" and state == "lock":
+                if ui.ask(d, "Lock this key?", ["Only if you made it.", "Locked for good:", "never replaced."]):
+                    try:
+                        lock_key()
+                        note = "key locked"
+                    except Exception as e:
+                        sys.print_exception(e)
+                        note = "not locked: %s" % e
+                elif ui.ask(d, "Make your own key?", ["Replaces this one", "and locks yours", "for good."]):
+                    try:
+                        make_key()
+                        note = "key made"
+                    except Exception as e:
+                        sys.print_exception(e)
+                        note = "no key: %s" % e
+                dirty = True
+            elif k == "A" and state == "none":
                 if ui.ask(d, "Make a key?", key_question()):
                     try:
                         make_key()

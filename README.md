@@ -3,10 +3,18 @@
 A [wedgie](https://wedgie.dev) app: sign [Safe{Wallet}](https://app.safe.global) transactions with a key
 that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
 
-- **The key.** First start: press A, and the chip makes a P-256 key: a Trust M in its key slot 2, an
-  ATECC608 in slot 0. It never leaves the chip. This replaces anything already in that slot. An ATECC608
-  fresh from the factory must first have its config written and locked, which is permanent: the question
-  says so, and A does it. The public key, and which chip holds it, are kept in `/saves/safe/key`.
+- **The key: yours, made once, locked for good.** First start: press A, and the chip makes a P-256 key.
+  It never leaves the chip.
+  - **Trust M** (`safe_key.py`): the key goes in slot KEY2 (replacing an unlocked one) and its public key
+    in DATA[11], then both are locked (lifecycle operational). After that nothing can replace the key,
+    change its public key or unlock them: no app, no computer, no one. Every start reads the public key
+    from the chip and checks it with a fresh signature; the Pico keeps nothing that matters. A chip whose
+    KEY2 is already locked with a key that isn't Safe Signer's shows **Swap the chip** and never signs.
+    A key from safe-12 or older (unlocked, its public key only in the save) asks **Lock this key?** once:
+    yes keeps it for good, no makes your own. Other apps use KEY3 and KEY4.
+  - **ATECC608** (slot 0): fresh from the factory its config must first be written and locked, which is
+    permanent: the question says so, and A does it. Its public key is kept in `/saves/safe/key`. Its slot
+    isn't locked yet.
 - **On chain.** The key becomes a Safe owner through Safe's passkey signer
   (`SafeWebAuthnSignerFactory.createSigner(x, y, verifiers)`, safe-modules passkey v0.2.1). That signer's
   address is the wedgie's Safe owner address, the same on every chain: the home screen shows it
@@ -34,7 +42,7 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
 
 ## Controls
 
-- A: make the key (first start) / sign
+- A: make the key (first start) / lock a key from before / sign
 - Y: no
 
 ## USB
@@ -49,8 +57,9 @@ One JSON line each way. Anything else goes to the wedgie firmware as usual.
 -> {"id":1,"type":"refused"}
 ```
 
-`hello` also returns `"safe": {"x", "y", "chip"}` (null before the key is made), `"signer"` (its Safe owner
-address, as the home screen shows it) and `"safe_chunk": 4000`.
+`hello` also returns `"safe": {"x", "y", "chip"}` (null until there's a key it signs with), `"signer"` (its Safe
+owner address, as the home screen shows it), `"safe_state"` (`"ok"`, `"none"` no key yet, `"lock"` a key from
+before waiting for its lock, `"swap"` a chip locked with someone else's key) and `"safe_chunk": 4000`.
 
 The wedgie keeps a list of its Safes (save `safes`, at most 32, newest first) so any computer can list
 them. Signing for a Safe adds it; a host that made or opened one adds it with `safe_note`:
@@ -85,7 +94,8 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
 
 ## Saves
 
-- `key`: the public key (x, y) and its chip (`"ATECC608"` or `"OPTIGA Trust M"`; none = a Trust M). Delete it only if you mean to make a new key: the old one is gone.
+- `key`: an ATECC608's public key (x, y). A Trust M keeps its own (DATA[11]); a safe-12 key's save is
+  dropped once it's locked.
 - `signer`: the Safe owner address worked out from `key` (made again if it's missing).
 - `safes`: the Safes it's in (`"<chainId>:<address>"`), for wedgie.dev/safe's list. Making a new key clears it.
 
