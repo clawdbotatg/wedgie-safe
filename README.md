@@ -24,6 +24,9 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   same one. Needs a chain with the P-256 precompile (Base, Optimism, Arbitrum, Ethereum).
 - **wedgie.dev/safe** makes a new Safe with the wedgie as an owner, adds it to a Safe you already own
   (from a browser wallet that is an owner), and signs and executes transactions.
+- **Execute on wedgie.dev/safe, not Safe{Wallet}.** Safe{Wallet} can't execute a transaction a wedgie
+  signed: it fails with GS021 ([Safe's bug](https://github.com/safe-global/safe-wallet-monorepo/issues/8808)).
+  Signing there is fine.
 - **Signing.** The computer sends the transaction's fields. The wedgie works out the Safe tx hash
   itself, shows what the transaction does (to, amount, owner changes, a red line for anything it can't
   read), and signs only when you press A on it. Y, or no answer in 2 minutes, is a no.
