@@ -1,13 +1,10 @@
 # Safe Signer: the wedgie signs Safe{Wallet} transactions with a key that lives in its secure chip, an
 # ATECC608 or an OPTIGA Trust M (whichever it has).
 #
-# The key: made once, by the person, on the wedgie (A on its screen). It never leaves the chip.
-# A Trust M (safe_key.py): the key in slot KEY2 and its public key in DATA[11], both locked for good once
-# made, so nothing can ever replace or lose it. The chip is the only truth: every start reads the public key
-# from it and checks it with a fresh signature. A chip whose KEY2 is already locked and isn't ours: swap it.
-# An ATECC608 (slot 0): as shipped it can't hold a key until its config is written and locked (the question
-# says so, and the yes locks it for good; atecc.CONFIG); its public key is saved in /saves/safe/key. Its
-# slot isn't locked yet (no ATECC608 to try it on).
+# The key: made once, by the person, on the wedgie (A on its screen), and locked in the chip for good, so
+# nothing can ever replace or lose it (safe_key.py). It never leaves the chip, and the chip is the only truth:
+# every start reads the public key from it. A Trust M: KEY2, its public key in DATA[11]. An ATECC608: slot 0.
+# A chip whose key is already locked and isn't Safe Signer's: swap it.
 # On chain the key is a passkey-style Safe owner: Safe's SafeWebAuthnSignerFactory makes a small signer
 # contract from (x, y), and that contract's address is added as an owner of the Safe.
 #
@@ -35,7 +32,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-13"
+FW = "safe-14"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -55,7 +52,7 @@ MAX_DATA = 8000
 d = None
 keys = None
 _poll = None
-key = None          # {"x": "0x..", "y": "0x..", "chip": "ATECC608" | "OPTIGA Trust M"} or None (no chip: a Trust M)
+key = None          # {"x": "0x..", "y": "0x..", "chip": "ATECC608" | "OPTIGA Trust M"} or None
 state = "none"      # "ok" signs; "none" no key yet; "lock" a key from before locking; "swap" not ours (safe_key)
 signer = None       # its Safe owner address, "0x.." checksummed (safe_addr.py), or None
 note = ""           # one line under the home screen (the last thing that happened)
@@ -270,23 +267,8 @@ def _unload():
     gc.collect()
 
 
-def key_question():
-    """What the yes to "Make a key?" does on this wedgie's chip."""
-    try:
-        a = _atecc()
-        if not a:
-            return ["Your own key, made in", "the chip and locked", "for good. Can't undo."]
-        if not a.lock_state()["configLocked"]:
-            return ["Locks the chip for good.", "Can't undo."]
-        return ["Replaces chip key slot 0."]
-    except Exception:                   # make_key says what went wrong
-        return ["Replaces the chip's key."]
-    finally:
-        _unload()
-
-
 def key_module():
-    """safe_key.py (a Trust M key's start, make and lock), loaded only for those."""
+    """safe_key.py (the key's start, make and lock), loaded only for those."""
     import safe_key
     return safe_key
 
@@ -300,21 +282,11 @@ def drop_key_module():
 def make_key():
     global key, state
     try:
-        a = _atecc()
-        if a:
-            ui.progress("Making your key", "in the chip", False)
-            if not a.lock_state()["configLocked"]:
-                a.write_config()                # checked byte for byte, then locked: permanent
-                a.lock_config()
-            x, y = a.genkey_new(0)
-            key = {"x": "0x%064x" % x, "y": "0x%064x" % y, "chip": "ATECC608"}
-            save.store("key", key)
-        else:
-            key = key_module().make()
-            save.delete("key")                  # a Trust M keeps it itself
+        key = key_module().make(_atecc())
     finally:
         drop_key_module()
     state = "ok"
+    save.delete("key")                          # the chip keeps it
     save.delete("signer")                       # a new key, a new address
     save.delete("safes")                        # and none of the old key's Safes
     find_signer()
@@ -324,7 +296,7 @@ def lock_key():
     """A key from before locking, kept for good (the person said it's theirs)."""
     global state
     try:
-        key_module().lock(key)
+        key_module().lock(key, _atecc())
     finally:
         drop_key_module()
     state = "ok"
@@ -332,14 +304,10 @@ def lock_key():
 
 
 def load_key():
-    """key and state from the chip (a Trust M), or from the save (an ATECC608)."""
+    """key and state from the chip (a safe-12 key's save only says which key to offer to lock)."""
     global key, state
-    saved = save.load("key", None)
-    if saved and saved.get("chip") == "ATECC608":
-        key, state = saved, "ok"
-        return
     try:
-        state, key = key_module().start(saved)
+        state, key = key_module().start(save.load("key", None), _atecc())
     finally:
         drop_key_module()
 
@@ -580,7 +548,7 @@ def run():
     try:
         load_key()
     except Exception as e:              # no chip answered: no key (making one says what's wrong)
-        print("safe: no key:", e)       # one line, not a traceback: a wedgie without a Trust M is normal
+        print("safe: no key:", e)       # one line, not a traceback: a wedgie with no secure chip is normal
         key, state = None, "none"
     try:
         find_signer()
@@ -607,7 +575,7 @@ def run():
                         note = "no key: %s" % e
                 dirty = True
             elif k == "A" and state == "none":
-                if ui.ask(d, "Make a key?", key_question()):
+                if ui.ask(d, "Make a key?", ["Your own key, made in", "the chip and locked", "for good. Can't undo."]):
                     try:
                         make_key()
                         note = "key made"

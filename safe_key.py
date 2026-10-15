@@ -1,7 +1,7 @@
-# Safe Signer's key in a Trust M: made once, locked for good. Loaded only at start and when the key is
-# made, then dropped.
+# Safe Signer's key: made once, locked for good, in a Trust M or an ATECC608. Loaded only at start and when
+# the key is made, then dropped. The chip is the only truth; the Pico keeps nothing about the key.
 #
-# The chip is the only truth. It keeps the private key (KEY2) and its public key (DATA[11]: MAGIC + X + Y;
+# A Trust M keeps the private key (KEY2) and its public key (DATA[11]: MAGIC + X + Y;
 # a Trust M hands a public key out only when it makes the key). Once made, both are locked: their
 # lifecycle goes to operational (0x07), which closes their "LcsO < 0x07" change rules for good. Nothing,
 # no app, no computer, no one, can replace the key, change the copy, or unlock them after that. Tried on a
@@ -9,6 +9,13 @@
 # signs. Other apps keep their keys in KEY3 and KEY4 (trustm.md).
 #
 # Every start the chip signs a fresh digest and the copy has to check it: a copy that doesn't is no key.
+#
+# An ATECC608 keeps the private key in slot 0 and works its public key out again whenever asked. Made once:
+# its config written and locked (atecc.CONFIG), its data zone locked, the key made, then slot 0 locked
+# (Lock, one slot). Tried on a real ATECC608 (2026-10-15): after the slot lock a new key is refused, the
+# public key is the same, it still signs, and the other slots are still free for other apps. A make cut
+# off before the slot lock leaves an unlocked key no one has seen: the next start says no key, and making
+# one replaces it.
 import gc, hashlib, binascii
 import ui
 
@@ -45,7 +52,7 @@ def _key(pub):
     return {"x": hx(pub[1:33]), "y": hx(pub[33:65]), "chip": CHIP}
 
 
-def start(saved):
+def start(saved, a=None):
     """What the chip holds, as (state, key):
         "ok", key       the key, locked, its copy checked
         "none", None    no key yet: the person makes one (A)
@@ -53,7 +60,10 @@ def start(saved):
                         the person locks it, or says no and makes their own
         "swap", None    a locked key that isn't Safe Signer's (or a copy that doesn't match): this chip
                         can't be used, swap it
-    Raises when no Trust M answers. The caller drops optiga after (safe._unload)."""
+    a: the ATECC608 (safe._atecc), or None for a Trust M. Raises when no Trust M answers. The caller drops
+    optiga / atecc after (safe._unload)."""
+    if a:
+        return _a_start(a, saved)
     import optiga
     try:
         c = optiga.Chip()
@@ -74,8 +84,10 @@ def start(saved):
         gc.collect()
 
 
-def lock(key):
+def lock(key, a=None):
     """Keep this key for good: its public key into the chip, then both locked. Checked first."""
+    if a:
+        return _a_lock(a, key)
     import optiga
     try:
         c = optiga.Chip()
@@ -88,10 +100,12 @@ def lock(key):
         gc.collect()
 
 
-def make():
+def make(a=None):
     """The person's own key: made in the chip (replacing an unlocked one), kept, locked for good."""
-    import optiga
     ui.progress("Making your key", "in the chip", False)
+    if a:
+        return _a_make(a)
+    import optiga
     try:
         c = optiga.Chip()
         if _locked(c, optiga.KEY2):
@@ -104,3 +118,75 @@ def make():
         return _key(pub)
     finally:
         gc.collect()
+
+
+# ---- ATECC608 (slot 0) --------------------------------------------------------------------------
+
+def _a_cfg(a):
+    return b"".join(a.read_config(b) for b in range(4))
+
+
+def _a_ours(a, c):
+    """Slot 0 set up as atecc.CONFIG sets it (a P-256 key that GenKey makes)."""
+    import atecc
+    return c[20:22] == atecc.CONFIG[20:22] and c[96:98] == atecc.CONFIG[96:98]
+
+
+def _a_locked(c):
+    return not c[88] & 1                    # SlotLocked, bit 0 = slot 0: 0 is locked
+
+
+def _a_key(a):
+    x, y = a.pubkey(0)
+    return {"x": "0x%064x" % x, "y": "0x%064x" % y, "chip": "ATECC608"}
+
+
+def _a_start(a, saved):
+    c = _a_cfg(a)
+    if c[87] != 0:                          # config not locked: a fresh chip
+        return "none", None
+    if not _a_ours(a, c):
+        return "swap", None
+    locked = _a_locked(c)
+    try:
+        k = _a_key(a)
+    except Exception:                       # slot 0 empty
+        return ("swap" if locked else "none"), None
+    if locked:
+        return "ok", k
+    if saved and saved.get("x") == k["x"] and saved.get("y") == k["y"]:
+        return "lock", k                    # safe-12 and older: made, saved, never locked
+    return "none", None
+
+
+def _a_lock_slot(a):
+    """Data zone locked (once per chip, needed first), then slot 0 locked for good. Checked."""
+    import atecc
+    if not a.lock_state()["dataLocked"]:
+        a.run(atecc.OP_LOCK, 0x81, 0, resp_len=1, wait_ms=35)      # data zone, no summary CRC
+    if not _a_locked(_a_cfg(a)):
+        a.run(atecc.OP_LOCK, 0x02, 0, resp_len=1, wait_ms=35)      # one slot: slot 0 (bits 2-5)
+    if not _a_locked(_a_cfg(a)):
+        raise OSError("the chip didn't lock")
+
+
+def _a_lock(a, key):
+    k = _a_key(a)
+    if k["x"] != key["x"] or k["y"] != key["y"]:
+        raise OSError("that key isn't in the chip")
+    _a_lock_slot(a)
+
+
+def _a_make(a):
+    if not a.lock_state()["configLocked"]:
+        a.write_config()                    # checked byte for byte, then locked: permanent
+        a.lock_config()
+    c = _a_cfg(a)
+    if not _a_ours(a, c) or _a_locked(c):
+        raise OSError("this chip's key is locked: swap the chip")
+    x, y = a.genkey_new(0)
+    k = _a_key(a)
+    if k["x"] != "0x%064x" % x or k["y"] != "0x%064x" % y:
+        raise OSError("the new key didn't check")
+    _a_lock_slot(a)
+    return k

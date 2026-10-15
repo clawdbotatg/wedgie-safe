@@ -12,9 +12,11 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
     KEY2 is already locked with a key that isn't Safe Signer's shows **Swap the chip** and never signs.
     A key from safe-12 or older (unlocked, its public key only in the save) asks **Lock this key?** once:
     yes keeps it for good, no makes your own. Other apps use KEY3 and KEY4.
-  - **ATECC608** (slot 0): fresh from the factory its config must first be written and locked, which is
-    permanent: the question says so, and A does it. Its public key is kept in `/saves/safe/key`. Its slot
-    isn't locked yet.
+  - **ATECC608** (slot 0): A writes and locks its config (`atecc.CONFIG`) and locks its data zone if that
+    isn't done yet, makes the key in slot 0, then locks slot 0. After that nothing can replace the key; the
+    chip works its public key out every start. Other slots stay free for other apps. A chip whose config
+    sets slot 0 up some other way shows **Swap the chip**. A safe-12 key (unlocked, saved) asks
+    **Lock this key?** the same way.
 - **On chain.** The key becomes a Safe owner through Safe's passkey signer
   (`SafeWebAuthnSignerFactory.createSigner(x, y, verifiers)`, safe-modules passkey v0.2.1). That signer's
   address is the wedgie's Safe owner address, the same on every chain: the home screen shows it
@@ -94,8 +96,8 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
 
 ## Saves
 
-- `key`: an ATECC608's public key (x, y). A Trust M keeps its own (DATA[11]); a safe-12 key's save is
-  dropped once it's locked.
+- `key`: only a safe-12 key's public key (x, y), to offer to lock it; dropped once it's locked or replaced.
+  The chip keeps the key and its public key.
 - `signer`: the Safe owner address worked out from `key` (made again if it's missing).
 - `safes`: the Safes it's in (`"<chainId>:<address>"`), for wedgie.dev/safe's list. Making a new key clears it.
 
