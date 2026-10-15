@@ -580,7 +580,7 @@ def run():
     try:
         load_key()
     except Exception as e:              # no chip answered: no key (making one says what's wrong)
-        sys.print_exception(e)
+        print("safe: no key:", e)       # one line, not a traceback: a wedgie without a Trust M is normal
         key, state = None, "none"
     try:
         find_signer()
