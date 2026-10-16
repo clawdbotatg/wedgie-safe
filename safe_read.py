@@ -30,8 +30,10 @@ ROUTERS = {"0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": "LI.FI",
            "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap",     # SwapRouter02, Base
            "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap"}     # SwapRouter02, Ethereum
 UNISWAP = ("0x2626664c2603336e57b271c5c0b26f421741e481", "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45")
-# Candide social recovery: a wallet starts on the 7-day one; pairing a wedgie moves it to the 14-day one
-RECOVERY = {"0x088f6cfd8bb1ddb1bb069ccb3fc1a98927d233f2": 7, "0x9bacd92f4687db306d7ded5d4513a51ea05df25b": 14}
+# Candide social recovery: a wallet starts on the 7-day one; pairing a wedgie puts the owner's own recovery address
+# on the 14-day one and the DAO on the 60-day one (the same Candide code, Instant Wallet deployed it)
+RECOVERY = {"0x088f6cfd8bb1ddb1bb069ccb3fc1a98927d233f2": 7, "0x9bacd92f4687db306d7ded5d4513a51ea05df25b": 14,
+            "0x6aa9a8ad0582db61a97a6e30eba22ba143d1e960": 60}
 PASSKEY_FACTORY = "0x1d31f259ee307358a26dfb23eb365939e8641195"  # safe-modules passkey 0.2.1 (a public contract; gitleaks:allow)
 MODULE_FACTORY = "0x000000000000addb49795b0f9ba5bc298cdda236"   # Zodiac ModuleProxyFactory
 ROLES_COPY = "0xf2964ce6161ce0e75964fe7927ce114cb0b283d5"       # Zodiac Roles 2.1.1
