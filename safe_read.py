@@ -30,12 +30,13 @@ ROUTERS = {"0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": "LI.FI",
            "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap",     # SwapRouter02, Base
            "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap"}     # SwapRouter02, Ethereum
 UNISWAP = ("0x2626664c2603336e57b271c5c0b26f421741e481", "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45")
-RECOVERY = "0x088f6cfd8bb1ddb1bb069ccb3fc1a98927d233f2"         # Candide social recovery, 7 days
+# Candide social recovery: a wallet starts on the 7-day one; pairing a wedgie moves it to the 14-day one
+RECOVERY = {"0x088f6cfd8bb1ddb1bb069ccb3fc1a98927d233f2": 7, "0x9bacd92f4687db306d7ded5d4513a51ea05df25b": 14}
 PASSKEY_FACTORY = "0x1d31f259ee307358a26dfb23eb365939e8641195"  # safe-modules passkey 0.2.1 (a public contract; gitleaks:allow)
 MODULE_FACTORY = "0x000000000000addb49795b0f9ba5bc298cdda236"   # Zodiac ModuleProxyFactory
 ROLES_COPY = "0xf2964ce6161ce0e75964fe7927ce114cb0b283d5"       # Zodiac Roles 2.1.1
 MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"       # the budget sends ETH through it
-MODULES = {RECOVERY: "7-day recovery"}
+MODULES = {m: "%d-day recovery" % d for m, d in RECOVERY.items()}
 # the Roles calls the limit pages read (assignRoles, enableModule, disableModule, scopeTarget, revokeTarget,
 # scopeFunction, setAllowance, setTransactionUnwrapper)
 ROLES_SELS = ("957ed2b3", "610b5925", "e009cfde", "0c6c76b8", "0172a43a", "7508dd98", "a8ec43ee", "2916a9af")
@@ -275,11 +276,11 @@ def describe(tx):
         m = _aarg(data, 1)
         return "Turn off", out + ([("Daily limit" if m == roles_of(safe) else MODULES[m], RED)] if m in MODULES or
                                   m == roles_of(safe) else _addr_lines("", m, RED)[1:])
-    if to == RECOVERY and sel == "be0e54d7" and len(data) == 68:
-        return "Add helper", out + _addr_lines("", _aarg(data, 0))[1:] + [("can swap owners", MUTED), ("after 7 days", MUTED)]
-    if to == RECOVERY and sel == "936f7d86" and len(data) == 100:
+    if to in RECOVERY and sel == "be0e54d7" and len(data) == 68:
+        return "Add helper", out + _addr_lines("", _aarg(data, 0))[1:] + [("can swap owners", MUTED), ("after %d days" % RECOVERY[to], MUTED)]
+    if to in RECOVERY and sel == "936f7d86" and len(data) == 100:
         return "Drop helper", out + _addr_lines("", _aarg(data, 1), RED)[1:]
-    if to == RECOVERY and sel == "0ba234d6" and len(data) == 4:
+    if to in RECOVERY and sel == "0ba234d6" and len(data) == 4:
         return "Cancel recovery", out
     if to == PASSKEY_FACTORY and sel == "0d2f0489":
         return "Make a key", out + [("not an owner yet", MUTED)]
