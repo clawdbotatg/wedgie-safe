@@ -32,7 +32,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-14"
+FW = "safe-16"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -229,7 +229,7 @@ def _draw(lines, y, bottom=182, big=False):
             d.text(s[22:], 54, y + 20, c)
         elif s:
             d.center_text(s, y + (4 if k == BIG else 0), c)
-        y += _h(l)
+        y += _h(l, big)
     return y
 
 
@@ -403,13 +403,24 @@ def _screen(head, lines, yes, k, foot="", safe=None):
     return False
 
 
+def _fit(lines, room=98):
+    """The lines in parts that each fit a page (_screen draws 68..166)."""
+    parts, part, h = [], [], 0
+    for l in lines:
+        if part and h + _h(l) > room:
+            parts.append(part)
+            part, h = [], 0
+        part.append(l)
+        h += _h(l)
+    return parts + [part] if part or not parts else parts
+
+
 def confirm(tx):
     """The transaction on the screen, a page per action in a batch. True only on A through every page."""
     k = L.Keys(physical=True)
     k.pressed()
     sf = tx["safe"]
     foot = "%s %s" % (CHAINS.get(tx["chainId"], "chain %d" % tx["chainId"]), short(tx["safe"]))
-    tail = [("pays a gas refund", RED)] if tx["gasPrice"] else []
     import safe_read
     try:
         acts = safe_read.batch(tx)
@@ -418,10 +429,13 @@ def confirm(tx):
         del acts
         del sys.modules["safe_read"]
         gc.collect()
+    # A page that doesn't fit goes on over more pages: every line is seen before the press (wedgie-dev 10-15:
+    # an unknown token's recipient fell off the bottom).
+    pages = [(head, part) for head, lines in pages for part in _fit(lines)]
     n = len(pages)
     for i, (head, lines) in enumerate(pages):
         last = i == n - 1
-        if not _screen(head, lines + (tail if last else []), "sign" if last else "next", k,
+        if not _screen(head, lines, "sign" if last else "next", k,
                        "%d/%d %s" % (i + 1, n, foot) if n > 1 else foot, sf):
             return False
     return True
@@ -440,6 +454,9 @@ def on_sign(mid, t):
         tx = parse(t or {})
     except Exception as e:
         W.send({"id": mid, "type": "error", "error": "bad tx: %s" % e})
+        return
+    if tx["gasPrice"]:                  # a refund the screen can't show in full (token, receiver, how much)
+        W.send({"id": mid, "type": "error", "error": "pays a gas refund (gasPrice > 0): Safe Signer won't sign that"})
         return
     ui.progress("Reading the transaction", "Safe tx hash", False)
     h = safe_tx_hash(tx)
