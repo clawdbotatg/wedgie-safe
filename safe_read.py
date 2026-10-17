@@ -54,6 +54,14 @@ LIMITS = {K_USDC: ("Daily limit", "USDC", 6, "a day with just Face ID"),
 RELAY = "0x4cfab32186e65e2a39ec0e882e11380cbf2f8a2f"
 NAMES = {RELAY: "the Instant relay"}
 ROUTER_THIS = "0x0000000000000000000000000000000000000002"      # SwapRouter02: "the router", then unwrap
+LIFI = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae"
+# LI.FI's swaps whose argument 3 is who gets paid (swapTokensGeneric and the six GenericSwapFacetV3 ones). Any
+# other selector with this Safe in word 3 is not a swap to this Safe (audit 10-16: one was shown as one).
+LIFI_SWAPS = (b"\x46\x30\xa0\xd8", b"\x5f\xd9\xae\x2e", b"\x2c\x57\xe8\x84", b"\x73\x6e\xac\x0b",
+              b"\x46\x66\xfc\x80", b"\x73\x32\x14\xa3", b"\xaf\x70\x60\xfd")
+# Roles reads a MultiSendCallOnly batch through this one (Instant Wallet's setup); any other reader can make the
+# Roles module see a different call than the one sent, so it's red
+UNWRAPPER = "0xb4cd4bb764c089f20da18700ce8bc5e49f369efd"
 
 # Safe's MultiSend contracts (1.3.0 and 1.4.1, both deployments): a batch is a DELEGATECALL to one of
 # these, and the wedgie shows every action in it. A DELEGATECALL to anything else stays red.
@@ -106,11 +114,13 @@ def _bytes_at(data, off):
 def _lifi_to(data, safe):
     """Who a LI.FI call pays. 0: this Safe, here (a swap: its receiver is argument 3). A chain id: this Safe on that
     chain (a bridge: BridgeData's receiver and destinationChainId). None: anyone else, or it can't tell."""
-    if len(data) >= 4 + 32 * 5 and _aarg(data, 3) == safe:
+    if data[:4] in LIFI_SWAPS and len(data) >= 4 + 32 * 5 and _aarg(data, 3) == safe:
         return 0
     try:
         o = 4 + int.from_bytes(_arg(data, 0), "big")
-        if o + 256 <= len(data) and hx(data[o + 172:o + 192]) == safe:
+        # BridgeData: receiver (field 5), destinationChainId (7), hasDestinationCall (9) must be false: a call
+        # on the far chain can send the money on to anyone
+        if o + 320 <= len(data) and hx(data[o + 172:o + 192]) == safe and not any(data[o + 288:o + 320]):
             far = int.from_bytes(data[o + 224:o + 256], "big")
             return far if far >> 32 == 0 else None
     except Exception:
@@ -183,12 +193,13 @@ def _roles(tx, sel):
     t = _aarg(data, 1) if len(data) >= 68 else ""
     what = _tok(tx, t)[0] or ("ETH sends" if t == MULTICALL3 else short(t))
     if sel == "0c6c76b8" and len(data) == 68:               # scopeTarget(role, target)
-        return "Daily limit", [("can spend", MUTED), (what, INK, BIG)]
+        ok = _tok(tx, t)[0] == "USDC" or t == MULTICALL3     # what Instant Wallet's limits spend through
+        return "Daily limit", [("can spend", MUTED), (what, INK if ok else RED, BIG)]
     if sel == "0172a43a" and len(data) == 68:               # revokeTarget(role, target)
         return "Daily limit", [("can't spend", MUTED), (what, RED, BIG)]
     if sel == "7508dd98":                                   # scopeFunction(role, target, selector, conditions, options)
         try:
-            r = _rule(data, t)
+            r = _rule(tx, data, t)
         except Exception:
             r = None
         return r or ("Daily limit", [("rule for", MUTED), (what, INK, BIG), ("can't read it", RED)])
@@ -200,8 +211,10 @@ def _roles(tx, sel):
             return name, [("%s %s" % (amount(refill, dec), sym), INK, BIG),
                                                  (why if per == 86400 else "every %ds" % per, MUTED if per == 86400 else RED)]
         return "Daily limit", [("%d" % refill, RED, BIG), ("of what? can't tell", RED)]
-    if sel == "2916a9af":                                   # setTransactionUnwrapper
-        return "Daily limit", [("works in bundles", INK)]
+    if sel == "2916a9af" and len(data) == 100:              # setTransactionUnwrapper(to, selector, adapter)
+        if _aarg(data, 0) == MULTISEND[0] and data[36:40] == b"\x8d\x80\xff\x0a" and _aarg(data, 2) == UNWRAPPER:
+            return "Daily limit", [("works in bundles", INK)]
+        return "Daily limit", [("reads bundles with", RED)] + _addr_lines("", _aarg(data, 2), RED)[1:]
     return None
 
 
@@ -218,10 +231,12 @@ def _conds(data):
     return out
 
 
-def _rule(data, target):
+def _rule(tx, data, target):
     """The rules Instant Wallet sets for the burner's USDC and ETH, in words; None for any other."""
     c = _conds(data)
     sel = binascii.hexlify(data[68:72]).decode()
+    if sel == "a9059cbb" and _tok(tx, target)[0] != "USDC":   # the USDC rules on another token: not what it says
+        return None
     if sel == "a9059cbb" and c == [(0, 5, 5, ""), (0, 1, 0, ""), (0, 1, 28, K_USDC)]:
         return "Daily limit", [("USDC", INK, BIG), ("to anyone", INK)]
     if sel == "a9059cbb" and len(c) == 7 and c[:3] == [(0, 0, 2, ""), (0, 5, 5, ""), (0, 5, 5, "")] and \
@@ -306,7 +321,7 @@ def describe(tx):
         if u:
             return u[0], out + u[1]
     if to in ROUTERS:
-        far = _lifi_to(data, safe)
+        far = _lifi_to(data, safe) if to == LIFI else None     # a Uniswap call _uniswap couldn't read: can't tell
         return ("Bridge" if far else "Swap"), out + [("via " + ROUTERS[to], INK)] + \
             ([("pay", MUTED), ("%s ETH" % amount(tx["value"], 18), INK, BIG)] if tx["value"] else []) + \
             ([("to this Safe", GREEN_D)] if far == 0 else
@@ -330,7 +345,11 @@ def batch(tx):
     data = tx["data"]
     if not (tx["operation"] == 1 and tx["to"] in MULTISEND and data[:4] == b"\x8d\x80\xff\x0a"):
         return None
+    # multiSend(bytes): the bytes must start right after their offset word, where the wedgie reads them.
+    # Solidity follows the offset; a batch pointed elsewhere signed one thing and showed another (audit 10-16).
     n = int.from_bytes(data[36:68], "big")
+    if data[4:36] != word(32) or len(data) < 68 + n:
+        raise ValueError("bad batch")
     b = data[68:68 + n]
     out, i = [], 0
     while i < len(b):

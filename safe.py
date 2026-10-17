@@ -32,7 +32,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-16"
+FW = "safe-18"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -422,8 +422,13 @@ def confirm(tx):
     sf = tx["safe"]
     foot = "%s %s" % (CHAINS.get(tx["chainId"], "chain %d" % tx["chainId"]), short(tx["safe"]))
     import safe_read
+    acts = None
     try:
         acts = safe_read.batch(tx)
+        # A DELEGATECALL runs someone else's code as this Safe: only Safe's own MultiSend, whose every action the
+        # wedgie reads, and none inside it (audit 10-16: a red page could still be signed)
+        if tx["operation"] and acts is None or acts and any(a["operation"] for a in acts):
+            raise ValueError("a DELEGATECALL: Safe Signer won't sign that")
         pages = [safe_read.describe(tx)] if acts is None else safe_read.fold(acts)
     finally:
         del acts
@@ -461,7 +466,12 @@ def on_sign(mid, t):
     ui.progress("Reading the transaction", "Safe tx hash", False)
     h = safe_tx_hash(tx)
     gc.collect()
-    if not confirm(tx):
+    try:
+        yes = confirm(tx)
+    except ValueError as e:             # a bad batch, a DELEGATECALL: nothing on screen to say yes to
+        W.send({"id": mid, "type": "error", "error": str(e)})
+        return
+    if not yes:
         note = "said no"
         W.send({"id": mid, "type": "refused", "safeTxHash": hx(h)})
         return
