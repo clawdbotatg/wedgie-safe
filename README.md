@@ -28,22 +28,35 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   signed: it fails with GS021 ([Safe's bug](https://github.com/safe-global/safe-wallet-monorepo/issues/8808)).
   Signing there is fine.
 - **Signing.** The computer sends the transaction's fields. The wedgie works out the Safe tx hash
-  itself, shows what the transaction does (to, amount, owner changes, a red line for anything it can't
-  read), and signs only when you press A on it. Y, or no answer in 2 minutes, is a no.
-  Amounts are big; every address is shown in full with its blockie beside it (the same 8x8 pattern
-  wallets draw, `safe_blockie.py`; colors are the nearest of the wedgie's 16). The first page shows a
-  blockie of the Safe tx hash: Instant Wallet's phone draws the same one, so a send started on the phone
-  and finished on a computer can be checked for a swap. Every page is a few plain words, and every Instant Wallet action is one page: a send, an owner change,
+  itself, shows what it can decode (to, amount, owner changes), and signs only when you press A on it.
+  Calls it cannot decode refuse. Y, or no answer in 2 minutes, is a no.
+  Amounts are big. Address pages use blockies (the same 8x8 pattern wallets draw, `safe_blockie.py`;
+  colors are the nearest of the wedgie's 16). The footer blockie identifies the Safe address, not the
+  transaction hash. It cannot detect a changed transaction for the same Safe.
+  Every page is a few plain words. Supported actions include a send, an owner change,
   a limit change, a swap (its exact approval folds in). The relay's fee (up to 1 USDC or 0.001 ETH) is a
-  small line on that page; a bigger one keeps its own page. First-time limit setup is two pages: the
-  amounts, then which key may spend them. Anything it can't read is red. The reading code (`safe_read.py`) loads only while a
+  small line on that page; a bigger one keeps its own page. First-time limit setup keeps the
+  amounts and key permissions on separate pages. Role assignments show the full role key.
+  Warnings are red. The reading code (`safe_read.py`) loads only while a
   question is up.
   Every page shows which Safe: its blockie, the chain, its address.
-- **What it won't take on trust.** A DELEGATECALL to anything but Safe's MultiSend is one red page, "can
-  take all", and nothing else about it. "Daily limit" pages only for this Safe's own Roles (its CREATE2
+- **What it won't take on trust.** It refuses DELEGATECALLs except a nonempty Safe MultiSend batch.
+  It also refuses DELEGATECALLs inside that batch. "Daily limit" pages only for this Safe's own Roles (its CREATE2
   address, worked out on the wedgie); any other contract with the same calls is "Unknown". An unlimited
-  approval says "ALL USDC", red. A LI.FI swap or bridge is green only when its receiver is this Safe. A
+  approval says "ALL USDC", red. Unrecognized calls, unknown router calls and unreadable conditions
+  refuse before signing. LI.FI routes refuse until the app can show their full route effects. A
   button press made before a page is up doesn't answer it.
+- **Supported reviews.** Signing needs a 240x240 display. Small OLED displays cannot show these pages,
+  so signing refuses them. A role assignment must change one membership. An allowance must have equal
+  initial balance, refill cap and refill amount, with a one-day refill period. Other shapes refuse.
+  A function permission that allows delegatecall also refuses.
+- **Trust boundary.** A non-exportable key does not prove that the firmware is genuine. Installed apps
+  and replacement firmware can access the chip. These review checks protect the normal signing path,
+  not a device that runs hostile code. Do not treat a chip authenticity check as firmware attestation.
+- **No PIN or biometric.** Safe Signer sets the WebAuthn user-verification flag because Safe's standard
+  passkey signer requires it. The app does not perform user verification. The wedgie's green button is
+  a physical-presence check only. Anyone who has the device can approve after pressing it. Do not treat
+  this key as protected by a PIN or biometric.
 
 ## Controls
 
@@ -91,8 +104,8 @@ the `safeTxHash` it gets back.
 
 What it reads in plain words: ETH and token sends, owner and threshold changes, modules on and off, the
 7-day recovery module (Candide: guardians, cancel), Instant Wallet's daily budget (Zodiac Roles), exact
-approvals, and swaps through Uniswap (pay, minimum back, who gets paid) or LI.FI (whether the calldata
-names this Safe). Anything else is a red line with its selector and address.
+approvals, and decoded Uniswap swaps (pay, minimum back, who gets paid). Unreadable calls refuse before
+signing. LI.FI routes are not yet fully decoded and refuse.
 
 The Safe signature for this owner is a contract signature (`v = 0`): `r` = the signer contract,
 `s` = offset of the dynamic part, which holds `abi.encode(authenticatorData, clientDataFields, r, s)`.
@@ -103,5 +116,14 @@ The Safe signature for this owner is a contract signature (`v = 0`): `r` = the s
   The chip keeps the key and its public key.
 - `signer`: the Safe owner address worked out from `key` (made again if it's missing).
 - `safes`: the Safes it's in (`"<chainId>:<address>"`), for wedgie.dev/safe's list. Making a new key clears it.
+
+## Checks
+
+Run `scripts/smoke.sh` with `uv` and an existing local Python interpreter. It uses no network, device or
+private key. It exercises the real USB signing handler with display, buttons and chip stand-ins.
+It is not a firmware or cryptographic hardware test.
+
+Before release, run wedgie-dev's `node tools/safechip.mjs --app <this-checkout>` on the virtual RP2040.
+Then check the exact app and firmware on a real board. Do not use an unverified build to hold funds.
 
 MIT

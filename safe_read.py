@@ -55,10 +55,6 @@ RELAY = "0x4cfab32186e65e2a39ec0e882e11380cbf2f8a2f"
 NAMES = {RELAY: "the Instant relay"}
 ROUTER_THIS = "0x0000000000000000000000000000000000000002"      # SwapRouter02: "the router", then unwrap
 LIFI = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae"
-# LI.FI's swaps whose argument 3 is who gets paid (swapTokensGeneric and the six GenericSwapFacetV3 ones). Any
-# other selector with this Safe in word 3 is not a swap to this Safe (audit 10-16: one was shown as one).
-LIFI_SWAPS = (b"\x46\x30\xa0\xd8", b"\x5f\xd9\xae\x2e", b"\x2c\x57\xe8\x84", b"\x73\x6e\xac\x0b",
-              b"\x46\x66\xfc\x80", b"\x73\x32\x14\xa3", b"\xaf\x70\x60\xfd")
 # Roles reads a MultiSendCallOnly batch through this one (Instant Wallet's setup); any other reader can make the
 # Roles module see a different call than the one sent, so it's red
 UNWRAPPER = "0xb4cd4bb764c089f20da18700ce8bc5e49f369efd"
@@ -109,23 +105,6 @@ def _bytes_at(data, off):
     """An ABI `bytes` whose head word is at `off` (offsets count from `base`)."""
     n = int.from_bytes(data[off:off + 32], "big")
     return data[off + 32:off + 32 + n]
-
-
-def _lifi_to(data, safe):
-    """Who a LI.FI call pays. 0: this Safe, here (a swap: its receiver is argument 3). A chain id: this Safe on that
-    chain (a bridge: BridgeData's receiver and destinationChainId). None: anyone else, or it can't tell."""
-    if data[:4] in LIFI_SWAPS and len(data) >= 4 + 32 * 5 and _aarg(data, 3) == safe:
-        return 0
-    try:
-        o = 4 + int.from_bytes(_arg(data, 0), "big")
-        # BridgeData: receiver (field 5), destinationChainId (7), hasDestinationCall (9) must be false: a call
-        # on the far chain can send the money on to anyone
-        if o + 320 <= len(data) and hx(data[o + 172:o + 192]) == safe and not any(data[o + 288:o + 320]):
-            far = int.from_bytes(data[o + 224:o + 256], "big")
-            return far if far >> 32 == 0 else None
-    except Exception:
-        pass
-    return None
 
 
 def _uniswap(tx):
@@ -181,11 +160,15 @@ def roles_of(safe):
 def _roles(tx, sel):
     """Zodiac Roles (the daily budget): what each setting call does, as (title, lines), or None."""
     data = tx["data"]
-    if sel == "957ed2b3" and len(data) >= 4 + 32 * 7:      # assignRoles(module, keys[], memberOf[])
-        o = int.from_bytes(_arg(data, 2), "big")
-        on = data[4 + o + 32 + 31] == 1
-        return "Daily limit", [("this key may spend" if on else "this key can't spend", INK if on else RED)] + \
-            _addr_lines("", _aarg(data, 0), INK if on else RED)[1:]
+    if sel == "957ed2b3":                                 # assignRoles(module, keys[], memberOf[])
+        if len(data) != 228 or _arg(data, 1) != word(96) or _arg(data, 2) != word(160) or \
+                _arg(data, 3) != word(1) or _arg(data, 5) != word(1) or _arg(data, 6) not in (word(0), word(1)):
+            raise ValueError("only one role change can be reviewed")
+        on = _arg(data, 6) == word(1)
+        role = hx(_arg(data, 4))
+        return "Role change", [("add key to role" if on else "remove key from role", INK if on else RED)] + \
+            _addr_lines("", _aarg(data, 0), INK if on else RED)[1:] + \
+            [("role", MUTED)] + [(role[i:i + 22], INK) for i in range(0, len(role), 22)]
     if sel == "610b5925" and len(data) == 36:               # enableModule(key)
         return "Daily limit", [("turn it on", INK)] + _addr_lines("", _aarg(data, 0))[1:]
     if sel == "e009cfde" and len(data) == 68:               # disableModule(prev, key)
@@ -198,19 +181,27 @@ def _roles(tx, sel):
     if sel == "0172a43a" and len(data) == 68:               # revokeTarget(role, target)
         return "Daily limit", [("can't spend", MUTED), (what, RED, BIG)]
     if sel == "7508dd98":                                   # scopeFunction(role, target, selector, conditions, options)
+        if len(data) < 164 or int.from_bytes(_arg(data, 4), "big") > 1:
+            raise ValueError("delegatecall permission cannot be reviewed")
         try:
             r = _rule(tx, data, t)
         except Exception:
             r = None
-        return r or ("Daily limit", [("rule for", MUTED), (what, INK, BIG), ("can't read it", RED)])
+        if r is None:
+            raise ValueError("Safe Signer can't review this rule")
+        return r
     if sel == "a8ec43ee" and len(data) == 4 + 32 * 6:       # setAllowance(key, balance, max, refill, period, ts)
         k = binascii.hexlify(_arg(data, 0)).decode()
+        balance, cap = int.from_bytes(_arg(data, 1), "big"), int.from_bytes(_arg(data, 2), "big")
         refill, per = int.from_bytes(_arg(data, 3), "big"), int.from_bytes(_arg(data, 4), "big")
+        if balance != cap or cap != refill or refill >> 128 or per != 86400 or \
+                int.from_bytes(_arg(data, 5), "big") >> 64:
+            raise ValueError("only a fixed daily allowance can be reviewed")
         if k in LIMITS:
             name, sym, dec, why = LIMITS[k]
             return name, [("%s %s" % (amount(refill, dec), sym), INK, BIG),
                                                  (why if per == 86400 else "every %ds" % per, MUTED if per == 86400 else RED)]
-        return "Daily limit", [("%d" % refill, RED, BIG), ("of what? can't tell", RED)]
+        raise ValueError("Safe Signer can't review this allowance key")
     if sel == "2916a9af" and len(data) == 100:              # setTransactionUnwrapper(to, selector, adapter)
         if _aarg(data, 0) == MULTISEND[0] and data[36:40] == b"\x8d\x80\xff\x0a" and _aarg(data, 2) == UNWRAPPER:
             return "Daily limit", [("works in bundles", INK)]
@@ -321,12 +312,8 @@ def describe(tx):
         if u:
             return u[0], out + u[1]
     if to in ROUTERS:
-        far = _lifi_to(data, safe) if to == LIFI else None     # a Uniswap call _uniswap couldn't read: can't tell
-        return ("Bridge" if far else "Swap"), out + [("via " + ROUTERS[to], INK)] + \
-            ([("pay", MUTED), ("%s ETH" % amount(tx["value"], 18), INK, BIG)] if tx["value"] else []) + \
-            ([("to this Safe", GREEN_D)] if far == 0 else
-             [("to this Safe on", INK), (CHAINS.get(far, "chain %d" % far), INK, BIG)] if far else
-             [("can't tell who gets it", RED)])
+        # A known receiver alone does not describe input assets, outputs or route permissions.
+        raise ValueError("Safe Signer can't review this router call")
     r = _roles(tx, sel) if sel in ROLES_SELS and to == roles_of(safe) else None
     if r:
         return r[0], out + r[1]
@@ -337,7 +324,7 @@ def describe(tx):
             return "Send", out + [("%d of token" % n, INK)] + _addr_lines("", to, RED)[1:] + _who(_aarg(data, 0), safe)
         r = _aarg(data, 0)
         return "Fee" if r == RELAY else "Send", out + [("%s %s" % (amount(n, tok[1]), tok[0]), INK, BIG)] + _who(r, safe)
-    return "Unknown", out + [("can't read this", RED, BIG)] + _addr_lines("on", to, RED)
+    raise ValueError("Safe Signer can't review this call")
 
 
 def batch(tx):
@@ -348,11 +335,13 @@ def batch(tx):
     # multiSend(bytes): the bytes must start right after their offset word, where the wedgie reads them.
     # Solidity follows the offset; a batch pointed elsewhere signed one thing and showed another (audit 10-16).
     n = int.from_bytes(data[36:68], "big")
-    if data[4:36] != word(32) or len(data) < 68 + n:
+    if data[4:36] != word(32) or n < 85 or len(data) < 68 + n:
         raise ValueError("bad batch")
     b = data[68:68 + n]
     out, i = [], 0
     while i < len(b):
+        if i + 85 > len(b):
+            raise ValueError("bad batch")
         dl = int.from_bytes(b[i + 53:i + 85], "big")
         if b[i] > 1 or i + 85 + dl > len(b):
             raise ValueError("bad batch")
@@ -402,9 +391,6 @@ def fold(acts):
                 else:
                     lim[0].append(lines[0])
             _limit_page(lim)
-            continue
-        if pages and not red and a["to"] != a["safe"] and sel == "957ed2b3" and pages[-1][2] == ("key", _aarg(a["data"], 0)):
-            pages[-1] = (head, lines, None)     # turn the key on, then let it spend: one page
             continue
         pages.append((head, lines, _aarg(a["data"], 0) if head == "Allow taking" else
                       ("key", _aarg(a["data"], 0)) if not red and a["to"] != a["safe"] and sel == "610b5925" and
