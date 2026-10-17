@@ -32,7 +32,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREEN_D, RED
 
-FW = "safe-18"
+FW = "safe-19"
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -234,8 +234,10 @@ def _draw(lines, y, bottom=182, big=False):
 
 
 def webauthn_digest(h):
-    """What the chip signs: the WebAuthn message the signer contract rebuilds (WebAuthn.sol)."""
-    auth = hashlib.sha256(RP_ID).digest() + b"\x05\x00\x00\x00\x00"     # user present + verified
+    """What the chip signs: the WebAuthn message the signer contract rebuilds (WebAuthn.sol).
+    The UV bit is set for Safe signer compatibility. This app has no PIN or biometric check; it is
+    not a user-verifying authenticator. The physical button gives user presence only."""
+    auth = hashlib.sha256(RP_ID).digest() + b"\x05\x00\x00\x00\x00"     # UP + UV asserted; UV is not actually checked
     ch = binascii.b2a_base64(h).decode().strip().rstrip("=").replace("+", "-").replace("/", "_")
     cdj = '{"type":"webauthn.get","challenge":"' + ch + '",' + FIELDS + "}"
     return auth, hashlib.sha256(auth + hashlib.sha256(cdj.encode()).digest()).digest()
@@ -417,6 +419,8 @@ def _fit(lines, room=98):
 
 def confirm(tx):
     """The transaction on the screen, a page per action in a batch. True only on A through every page."""
+    if getattr(d, "width", 0) != 240 or getattr(d, "height", 0) != 240:
+        raise ValueError("signing needs a 240x240 display")
     k = L.Keys(physical=True)
     k.pressed()
     sf = tx["safe"]
@@ -437,6 +441,8 @@ def confirm(tx):
     # A page that doesn't fit goes on over more pages: every line is seen before the press (wedgie-dev 10-15:
     # an unknown token's recipient fell off the bottom).
     pages = [(head, part) for head, lines in pages for part in _fit(lines)]
+    if not pages:
+        raise ValueError("nothing to review")
     n = len(pages)
     for i, (head, lines) in enumerate(pages):
         last = i == n - 1
