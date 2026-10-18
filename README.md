@@ -42,7 +42,10 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
 - **What it won't take on trust.** A DELEGATECALL to anything but Safe's MultiSend is one red page, "can
   take all", and nothing else about it. "Daily limit" pages only for this Safe's own Roles (its CREATE2
   address, worked out on the wedgie); any other contract with the same calls is "Unknown". An unlimited
-  approval says "ALL USDC", red. A LI.FI swap or bridge is green only when its receiver is this Safe. A
+  approval says "ALL USDC", red. A LI.FI swap or bridge shows who gets paid (green only when it's this
+  Safe), then "trust LI.FI" in big red: it can't check what comes back. A page with a big red line has a
+  red title. What it can't read it says in red, and A still signs (only a DELEGATECALL
+  and a gas refund are refused: the screen can't show them). A
   button press made before a page is up doesn't answer it.
 
 ## Controls
@@ -92,7 +95,7 @@ the `safeTxHash` it gets back.
 What it reads in plain words: ETH and token sends, owner and threshold changes, modules on and off, the
 7-day recovery module (Candide: guardians, cancel), Instant Wallet's daily budget (Zodiac Roles), exact
 approvals, and swaps through Uniswap (pay, minimum back, who gets paid) or LI.FI (whether the calldata
-names this Safe). Anything else is a red line with its selector and address.
+names this Safe; not what comes back, so its page is red). Anything else is a red line with its selector and address.
 
 The Safe signature for this owner is a contract signature (`v = 0`): `r` = the signer contract,
 `s` = offset of the dynamic part, which holds `abi.encode(authenticatorData, clientDataFields, r, s)`.
