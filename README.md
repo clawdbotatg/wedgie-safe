@@ -38,7 +38,7 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   small line on that page; a bigger one keeps its own page. First-time limit setup is two pages: the
   amounts, then which key may spend them. Anything it can't read is red. The reading code (`safe_read.py`) loads only while a
   question is up.
-  Every page shows which Safe: its blockie, the chain, its address.
+  Every page shows which Safe at the top, as wedgie.dev/safe does: a dark card with its blockie and address (first 6 and last 4 in white); the chain is at the bottom.
 - **What it won't take on trust.** A DELEGATECALL to anything but Safe's MultiSend is one red page, "can
   take all", and nothing else about it. "Daily limit" pages only for this Safe's own Roles (its CREATE2
   address, worked out on the wedgie); any other contract with the same calls is "Unknown". An unlimited
