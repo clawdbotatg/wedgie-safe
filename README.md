@@ -109,6 +109,35 @@ What it reads in plain words: ETH and token sends, owner and threshold changes, 
 approvals, and swaps through Uniswap (pay, minimum back, who gets paid) or LI.FI (whether the calldata
 names this Safe; not what comes back, so its page is red). Anything else is a red line with its selector and address.
 
+## Clear signing (ERC-7730)
+
+Every other contract call is read from the public [ERC-7730 registry](https://github.com/ethereum/clear-signing-erc7730-registry)'s
+descriptors, sent in the [wire format](https://github.com/ZKNoxHQ/eth-universal-signer/blob/7730-wire-format-implementations/specs/7730_wire_format.md)
+(Bacca's CBOR binding, v 29.09.26-1). The page shows the descriptor's intent as the title, then its fields: amounts
+with the token's ticker, every address in full with its blockie ("this Safe" when it is), dates, enums, a call
+inside a call (one level).
+
+- **Nothing to trust in the host.** wedgie.dev/safe sends the descriptors and tokens a tx needs ahead of it
+  (`safe_clear`). Each one carries a Merkle proof (signature algorithm 4) to a root built into this app
+  (`safe_roots.py`, made by wedgie-dev `wire/release.py`), and the app is signed when wedgie.dev publishes it. A
+  host can leave something out (the page then says it can't read the call), never change it.
+- **Two roots.** a: descriptors an auditor attested (ERC-8176; today Cyfrin) and the tokens. b: the rest of the
+  registry; their pages end in red "not audited".
+- **New registry data needs a new app.** The roots change with each release of the data.
+- **Refused, not half shown:** a `mustMatch` field that doesn't match, an enum value the descriptor doesn't
+  list, anything it can't decode. Then it's the red "can't read this" page, with the reason.
+- `safe_7730.py` and `safe_wire.py` (a copy of wedgie-dev `wire/wire.py`) load only while a question with a
+  bundle is up. Tested against the registry's own test transactions (wedgie-dev `tools/test_clear.py`).
+
+```
+{"id":7,"type":"safe_clear","at":0,"hex":"a20881..."}      -> {"id":7,"type":"safe_clear","have":1201}
+{"id":8,"type":"safe_sign","tx":{...}}                     (uses the bundle, then drops it)
+```
+
+The bundle is a CBOR map `{8: [token-information], 13: [transaction-info]}` (eth-sign-request's keys), at most
+6000 bytes, in pieces of up to `safe_chunk` hex characters like `safe_data`. `hello` says which data the app
+trusts: `"safe_clear": "<tag>"`, the folder wedgie.dev/clear/<tag>/.
+
 The Safe signature for this owner is a contract signature (`v = 0`): `r` = the signer contract,
 `s` = offset of the dynamic part, which holds `abi.encode(authenticatorData, clientDataFields, r, s)`.
 
