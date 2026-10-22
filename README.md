@@ -79,6 +79,18 @@ them. Signing for a Safe adds it; a host that made or opened one adds it with `s
 
 It's only a list of addresses: wedgie.dev/safe checks on chain that the wedgie is an owner before showing one.
 
+To take a queued transaction off the list (no transaction on chain), the wedgie signs Safe's `DeleteRequest`
+for it. The host sends the fields with `dataHash` instead of `data`; the wedgie works out the Safe tx hash, shows
+**Remove it? #n** (it can still run till another transaction takes #n), and signs on A:
+
+```
+{"id":7,"type":"safe_remove","tx":{..., "dataHash":"0x..", "nonce":15},"totp":497960}
+-> {"id":7,"type":"safe_sig","safeTxHash":"0x..","deleteHash":"0x..", ...the same signature fields}
+```
+
+Safe's Transaction Service only deletes for the wallet that proposed it, so wedgie.dev/safe sends this to
+Instant Wallet's queue, which checks it through the signer contract (`isValidSignature`) and lists it as removed.
+
 A USB line is at most 6 KB. A bigger transaction (a bridge swap's calldata) sends its data ahead in
 pieces of up to `safe_chunk` hex characters, then `safe_sign` with `"data": "@"`:
 
