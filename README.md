@@ -24,7 +24,7 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   same one. Needs a chain with the P-256 precompile (Base, Optimism, Arbitrum, Ethereum).
 - **wedgie.dev/safe** makes a new Safe with the wedgie as an owner, adds it to a Safe you already own
   (from a browser wallet that is an owner), and signs and executes transactions.
-- **Prove it's you** (`safe_prove.py`): a site sends a short text and a code; the wedgie shows the text and, on A,
+- **Prove it's you** (`safe_key.py`): a site sends a short text and a code; the wedgie shows the text and, on A,
   its key signs both, and the chip's factory key signs the key (Infineon's certificate), so the site knows it's
   this wedgie, just now. [wedgie.dev/telegram](https://wedgie.dev/telegram) lets you into the wedgie Telegram group with it.
 - **Execute on wedgie.dev/safe, not Safe{Wallet}.** Safe{Wallet} can't execute a transaction a wedgie
