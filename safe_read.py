@@ -225,7 +225,13 @@ def describe(tx):
         who = [("by " + ROUTERS[sp], c)] if sp in ROUTERS else [("by", c)] + _addr_lines("", sp, c)[1:]
         return "Allow taking", out + [("ALL " + (_tok(tx, to)[0] or "of it"), c, BIG, _ico(tx, to)) if n >> 128 else _big(tx, to, n, c)] + who
     why = tx.get("why")                 # safe.confirm tried the descriptor first and it couldn't
+    p = tx.get("pre")                   # a batch's call, read from its descriptor first (safe_7730.reads)
+    if isinstance(p, tuple):
+        return p
+    why = p or why
     if tx.get("clear"):                 # an ERC-7730 descriptor came with it (safe_7730: proven, or ignored)
+        import gc
+        gc.collect()                    # a batch: safe_read is loaded too, and compiling safe_7730 needs room
         import safe_7730
         c = safe_7730.read(tx, tx["clear"])
         if isinstance(c, tuple):
@@ -263,12 +269,12 @@ def batch(tx):
     if data[4:36] != word(32) or len(data) < 68 + n or not n:     # empty: nothing to show, nothing signed (audit 10-18)
         raise ValueError("bad batch")
     b = data[68:68 + n]
-    out, i = [], 0
+    out, i, pre = [], 0, tx.get("pre") or {}
     while i < len(b):
         dl = int.from_bytes(b[i + 53:i + 85], "big")
         if b[i] > 1 or i + 85 + dl > len(b):
             raise ValueError("bad batch")
-        out.append({"chainId": tx["chainId"], "safe": tx["safe"], "operation": b[i], "clear": tx.get("clear"),
+        out.append({"chainId": tx["chainId"], "safe": tx["safe"], "operation": b[i], "pre": pre.get(len(out)),
                     "to": hx(b[i + 1:i + 21]), "value": int.from_bytes(b[i + 21:i + 53], "big"),
                     "data": b[i + 85:i + 85 + dl]})
         i += 85 + dl
