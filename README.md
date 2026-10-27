@@ -24,7 +24,7 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
   same one. Needs a chain with the P-256 precompile (Base, Optimism, Arbitrum, Ethereum).
 - **wedgie.dev/safe** makes a new Safe with the wedgie as an owner, adds it to a Safe you already own
   (from a browser wallet that is an owner), and signs and executes transactions.
-- **Prove it's you** (`safe_key.py`): a site sends a short text and a code; the wedgie shows the text and, on A,
+- **Prove it's you** (`safe_msg.py`): a site sends a short text and a code; the wedgie shows the text and, on A,
   its key signs both, and the chip's factory key signs the key (Infineon's certificate), so the site knows it's
   this wedgie, just now. [wedgie.dev/telegram](https://wedgie.dev/telegram) lets you into the wedgie Telegram group with it.
 - **Execute on wedgie.dev/safe, not Safe{Wallet}.** Safe{Wallet} can't execute a transaction a wedgie
@@ -89,6 +89,16 @@ for it. The host sends the fields with `dataHash` instead of `data`; the wedgie 
 ```
 {"id":7,"type":"safe_remove","tx":{..., "dataHash":"0x..", "nonce":15},"totp":497960}
 -> {"id":7,"type":"safe_sig","safeTxHash":"0x..","deleteHash":"0x..", ...the same signature fields}
+```
+
+A site's text message (`personal_sign`, "Sign in with Ethereum") signed for a Safe (ERC-1271, as Safe's fallback
+handler checks it). The host sends the message's own bytes; the wedgie shows every line of the text, works out the
+EIP-191 hash and Safe's `SafeMessage` hash itself, and signs on A. Plain ASCII text only, up to 1500 bytes: anything
+else it can't show, so it won't sign (`safe_msg.py`, loaded only for it):
+
+```
+{"id":8,"type":"safe_message","chainId":1,"safe":"0x..","hex":"0x<the message's bytes>"}
+-> {"id":8,"type":"safe_sig","messageHash":"0x..","safeMessageHash":"0x..", ...the same signature fields}
 ```
 
 Safe's Transaction Service only deletes for the wallet that proposed it, so wedgie.dev/safe sends this to
