@@ -154,6 +154,27 @@ trusts: `"safe_clear": "<tag>"`, the folder wedgie.dev/clear/<tag>/.
 The Safe signature for this owner is a contract signature (`v = 0`): `r` = the signer contract,
 `s` = offset of the dynamic part, which holds `abi.encode(authenticatorData, clientDataFields, r, s)`.
 
+## Signed simulation
+
+A host can send a simulation with the tx: what actually moves (ETH out, tokens in, in dollars), from a
+[clear-sim](https://github.com/clawdbotatg/clear-sim) server. The wedgie then shows a short page first (what you
+send, what you get, warnings), the usual pages under it (d-pad down/up). Green signs only once every page was seen.
+
+- **The computer can't change it.** The wedgie picks a one-use nonce; the server signs (P-256) the nonce, the tx's
+  hash and its answer; the wedgie works out the tx hash itself and checks the signature against the keys built
+  into `safe_sim.py` (today: sim.wedgie.dev). A changed, replayed or other tx's answer is dropped: the usual pages.
+- **What it checks:** ETH out no more than the tx's value; a token in at least the descriptor's minimum; a revert.
+  Names and prices are the server's word, and the page says whose.
+- More keys can go in `safe_sim.py` (a friend's server, your own).
+
+```
+{"id":9,"type":"safe_nonce"}                               -> {"id":9,"type":"safe_nonce","nonce":"<32 hex>"}
+POST https://sim.wedgie.dev {chain, from: the Safe, to, value, data, nonce}  -> the signed answer
+{"id":10,"type":"safe_sign","tx":{..., "sim": <the answer>}}
+```
+
+`hello` says `"safe_sim": "p256"`.
+
 ## Saves
 
 - `key`: only a safe-12 key's public key (x, y), to offer to lock it; dropped once it's locked or replaced.
