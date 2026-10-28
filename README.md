@@ -56,6 +56,12 @@ that lives in the wedgie's secure chip: an ATECC608 or an OPTIGA Trust M.
 - A: make the key (first start) / lock a key from before / sign
 - Y: no
 
+## Building
+
+The wedgie runs `.mpy` for the big modules that load per question (wedgie.json's files): compiling a big `.py`
+on the wedgie needs one free block it often doesn't have. After editing one, run `tools/mpy.sh` and commit both.
+Bump `FW` in safe.py and `"version"` in wedgie.json together.
+
 ## USB
 
 One JSON line each way. Anything else goes to the wedgie firmware as usual.
