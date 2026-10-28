@@ -2,7 +2,7 @@
 # and switch (param 14) in a descriptor, as wedgie-dev wire/from7730.py binds them to the wire format. Loaded by
 # safe_7730 only for a field that has one (the RP2040's heap can't compile it in safe_7730).
 import safe_wire as w
-from safe_7730 import Bad, _addr, _sub, _values, _pick, _field, _fieldat
+from safe_7730 import Bad, _addr, _sub, _values, _pick, _field, _fieldat, _text
 
 
 def field(ctx, call, label, param, v, i, out):
@@ -79,7 +79,7 @@ def switch_at(ctx, call, fi, out):
                 break
         if ci is None:
             ci = w.at(b, pj, 4)
-        _case(ctx, call, label, n, ci, v, out)
+        _case(ctx, call, label, n, ci, v, i, out, pj)
 
 
 def _key(ctx, call, ex, i):
@@ -93,12 +93,17 @@ def _key(ctx, call, ex, i):
     return n & mask if mask is not None else n
 
 
-def _case(ctx, call, label, n, ci, v, out):
+def _case(ctx, call, label, n, ci, v, i, out, pj):
     b = ctx.b
     if b[ci] == 0xf6:                   # null: reject
         raise Bad("%s: case 0x%02x it can't read" % (label or "switch", n))
     sub = []
-    if w.load(b, w.at(b, ci, 0)) == 0:  # a tuple: the payload is its ABI encoding
+    t = w.load(b, w.at(b, ci, 0))
+    if t == 2:                          # a display format for the value itself (its token picked by a flag)
+        p = w.load(b, w.at(b, ci, 1))
+        p[1] = w.load(b, w.at(b, pj, 1))    # its value: the switch's own
+        out.append((label,) + _text(ctx, call, p, v, i))
+    elif t == 0:                        # a tuple: the payload is its ABI encoding
         here = _sub(call, cd=v)
         for f in w.elements(b, w.at(b, ci, 2)):
             _fieldat(ctx, here, f, sub)
@@ -119,7 +124,11 @@ def _switch(ctx, call, label, param, v, i, out):
     if case is None:
         raise Bad("%s: case 0x%02x it can't read" % (label or "switch", n))
     sub = []
-    if case[0] == 0:                    # a tuple: the payload is its ABI encoding
+    if case[0] == 2:
+        p = list(case[1])
+        p[1] = param[1]
+        out.append((label,) + _text(ctx, call, p, v, i))
+    elif case[0] == 0:                  # a tuple: the payload is its ABI encoding
         here = _sub(call, cd=v)
         for f in case[2]:
             _field(ctx, here, f, sub)

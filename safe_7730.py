@@ -257,6 +257,10 @@ def _text(ctx, call, param, val, i):
         return "%s %s" % (A.amount(_int(val, 1, None), 18), ctx.coin), _amount(I.of(ctx.coin))
     if k == 2:                          # token amount
         n = _int(val, fam, size)
+        sp = None                       # a value the contract reads as words (Uniswap v4's 0: all of it), by descriptor
+        for x in (param[7] if len(param) > 7 else ()):
+            if x[0] == n:
+                sp = x[1]
         tok = _pick(_values(ctx, call, param[2]), i) if param[2] else None
         chain = call.chain
         if len(param) > 6 and param[6]:
@@ -270,9 +274,11 @@ def _text(ctx, call, param, val, i):
         else:
             t = ctx.token(chain, _raw(_addr(tok)))
             if t is None:
-                return "%d of %s" % (n, _addr(tok)), "token?"
+                return "%s of %s" % (sp.replace("{token}", "tokens") if sp else n, _addr(tok)), "token?"
             ticker, d = t
             pic = I.at(chain, _addr(tok))
+        if sp:
+            return (sp.replace("{token}", ticker) if "{token}" in sp else sp + " " + ticker), _amount(pic)
         if param[4] is not None and n >= param[4]:      # "!": red on an approval (read's RISKY)
             return "%s %s" % (param[5] or "Unlimited", ticker), _amount(pic) + "!"
         return "%s %s" % (A.amount(n, d), ticker), _amount(pic)
@@ -528,7 +534,7 @@ def read(tx, bundle):
         elif kind == "named":
             lines.append((text, INK))
         elif kind == "token?":              # a token no list knows: the number, and whose
-            n, a = text.split(" of ")
+            n, a = text.rsplit(" of ", 1)
             lines.extend([(n, RED), ("of a token it doesn't know", RED), (a, RED, ADDR)])
         elif kind == "addr?":
             lines.extend([("a token it doesn't know", RED), (text, RED, ADDR)])

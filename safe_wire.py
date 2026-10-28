@@ -11,7 +11,7 @@
 #   extra_bytes(calldata) bytes past the last whole slot (1inch-style trailers): the screen must warn
 # Limits are the spec's minimums or more; past one it raises ValueError, never shows half an answer.
 
-MAX_DEPTH = 24          # CBOR nesting (ERC-8362: a switch in a switch case)
+MAX_DEPTH = 28          # CBOR nesting (ERC-8362: a switch in a switch case, a switch on a flag in that)
 MAX_PATH = 16           # path elements
 MAX_ARRAYS = 8          # nested arrays in a path
 MAX_VALUES = 16         # values one value yields

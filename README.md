@@ -145,6 +145,9 @@ inside a call (one level).
 - **New registry data needs a new app.** The roots change with each release of the data.
 - **Refused, not half shown:** a `mustMatch` field that doesn't match, an enum value the descriptor doesn't
   list, anything it can't decode. Then it's the red "can't read this" page, with the reason.
+- **Two additions of ours** (wedgie-dev `wire/README.md`, proposed for ERC-7730): a token amount can name an exact
+  value's words (Uniswap v4's 0: "all USDC the swap gives", never a global rule: approve 0 still reads 0), and an
+  ERC-8362 switch case can be a display format (a v4 one-pool swap's token, picked by `zeroForOne`).
 - `safe_7730.py` and `safe_wire.py` (a copy of wedgie-dev `wire/wire.py`) load only while a question with a
   bundle is up. Tested against the registry's own test transactions (wedgie-dev `tools/test_clear.py`).
 
