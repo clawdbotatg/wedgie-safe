@@ -43,7 +43,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREY, GREEN_D, RED
 
-FW = "safe-43"         # and "version" in wedgie.json: the site shows it (v43)
+FW = "safe-44"         # and "version" in wedgie.json: the site shows it (v44)
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -638,6 +638,9 @@ def confirm(tx):
         finally:
             _unclear()
     if pages is None:
+        # the bundle is read: clear_buf's 6.6 KB back before safe_read loads (a real wedgie, safe-42, a Uniswap
+        # swap + fee from Instant Wallet: MemoryError, 1280 bytes, at this import). _keep takes it again after.
+        _lend()
         import safe_read
         acts = None
         try:
@@ -868,9 +871,10 @@ def pump():
         _lend()
         W.send({"type": "error", "error": "no room for that line: send it again"})
         return
-    # a big line on its way (a 17-send batch, 5.7 KB): its copy at the end needs one block that size, so
-    # clear_buf's room goes back first (safechip 10-28, firmware 0.3.74: MemoryError in that copy)
-    if line is None and R.n > 1024 and clear_buf is not None and not clear_have:
+    # a line bigger than any piece (a 17-send batch in one line, 5.7 KB): its copy at the end needs one block
+    # that size, so clear_buf's room goes back first (safechip 10-28, firmware 0.3.74: MemoryError in that
+    # copy). Not for a safe_clear / safe_data piece (CHUNK hex, ~4.1 KB): the bundle's first one needs clear_buf.
+    if line is None and R.n > CHUNK + 500 and clear_buf is not None and not clear_have:
         _lend()
     if R.intr:                          # a Ctrl-C while sealed: the red question (hatch.py)
         R.intr = False
