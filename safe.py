@@ -43,7 +43,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREY, GREEN_D, RED
 
-FW = "safe-44"         # and "version" in wedgie.json: the site shows it (v44)
+FW = "safe-45"         # and "version" in wedgie.json: the site shows it (v45)
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
@@ -226,6 +226,17 @@ def _keep():
             pass
 
 
+def _join(parts):
+    """The pieces in one block; clear_buf's room, then once more, when there's no block that big (safechip 10-28:
+    a bundle in pieces, 6682 bytes, after _keep found no room for clear_buf)."""
+    gc.collect()
+    try:
+        return b"".join(parts)
+    except MemoryError:
+        _lend()
+        return b"".join(parts)
+
+
 def review_round():
     """The clear-review round saved (safe_review), 0 for none: hello says it, so a host sends a newer one."""
     v = save.load("review", None)
@@ -284,13 +295,15 @@ def parse(t):
     A clear-signing bundle sent ahead comes along as tx["clear"] (and is used up)."""
     global pieces, have, room, clear, clear_have
     room = None
-    cb = (clear if clear_have == len(clear) else None) if isinstance(clear, memoryview) else b"".join(clear) if clear else None
-    clear, clear_have = [], 0
+    # used up first, whatever happens: a join that ran out of memory left them for the next tx, which failed too
+    parts, n, clear, clear_have = clear, clear_have, [], 0
+    cb = (parts if n == len(parts) else None) if isinstance(parts, memoryview) else _join(parts) if parts else None
+    parts = None
     data = t.get("data") or "0x"
     if data == "@":
-        gc.collect()
-        data = b"".join(pieces)
-        pieces, have = [], 0
+        parts, pieces, have = pieces, [], 0
+        data = _join(parts)
+        parts = None
         gc.collect()
     else:
         data = unhex(data)
@@ -638,10 +651,12 @@ def confirm(tx):
         finally:
             _unclear()
     if pages is None:
-        # the bundle is read: clear_buf's 6.6 KB back before safe_read loads (a real wedgie, safe-42, a Uniswap
-        # swap + fee from Instant Wallet: MemoryError, 1280 bytes, at this import). _keep takes it again after.
-        _lend()
-        import safe_read
+        try:
+            import safe_read
+        except MemoryError:             # clear_buf's room, then once more (a real wedgie, safe-42, a Uniswap swap + fee
+            sys.modules.pop("safe_read", None)     # from Instant Wallet: MemoryError, 1280 bytes, here)
+            _lend()
+            import safe_read
         acts = None
         try:
             acts = safe_read.batch(tx)
