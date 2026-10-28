@@ -2,10 +2,10 @@
 # (safe.confirm imports it and lets it go): the app's idle heap needs room for a 6 KB USB line.
 import binascii
 from ui import INK, MUTED, GREEN_D, RED
-from safe import word, hx, short, amount, coin, CHAINS, BIG, ADDR
+from safe import word, hx, short, amount, coin, BIG, ADDR
 
 from safe_icons import TOKENS     # tokens the wedgie knows itself: (chain, address) -> (symbol, decimals)
-from safe_book import ROUTERS, MODULE_FACTORY, ROLES_COPY, RELAY, NAMES, roles_of, init as _init
+from safe_book import MODULE_FACTORY, ROLES_COPY, RELAY, NAMES, roles_of, init as _init
 
 MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11"       # the budget sends ETH through it
 # the Roles calls the limit pages read (assignRoles, enableModule, disableModule, scopeTarget, revokeTarget,
@@ -20,11 +20,6 @@ ROLE = "86c37482ef7146c27eb2859f3f7443e45fcbc4e32caa3c89515918953dd30949"     # 
 LIMITS = {K_USDC: ("Daily limit", "USDC", 6, "a day with just Face ID"),
           K_ETH: ("Daily limit", None, 18, "a day with just Face ID"),     # None: the chain's coin
           K_FEE: ("Fee limit", "USDC", 6, "a day for fees")}
-LIFI = "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae"
-# LI.FI's swaps whose argument 3 is who gets paid (swapTokensGeneric and the six GenericSwapFacetV3 ones). Any
-# other selector with this Safe in word 3 is not a swap to this Safe (audit 10-16: one was shown as one).
-LIFI_SWAPS = (b"\x46\x30\xa0\xd8", b"\x5f\xd9\xae\x2e", b"\x2c\x57\xe8\x84", b"\x73\x6e\xac\x0b",
-              b"\x46\x66\xfc\x80", b"\x73\x32\x14\xa3", b"\xaf\x70\x60\xfd")
 # Roles reads a MultiSendCallOnly batch through this one (Instant Wallet's setup); any other reader can make the
 # Roles module see a different call than the one sent, so it's red
 UNWRAPPER = "0xb4cd4bb764c089f20da18700ce8bc5e49f369efd"
@@ -72,24 +67,6 @@ def _bytes_at(data, off):
     """An ABI `bytes` whose head word is at `off` (offsets count from `base`)."""
     n = int.from_bytes(data[off:off + 32], "big")
     return data[off + 32:off + 32 + n]
-
-
-def _lifi_to(data, safe):
-    """Who a LI.FI call pays. 0: this Safe, here (a swap: its receiver is argument 3). A chain id: this Safe on that
-    chain (a bridge: BridgeData's receiver and destinationChainId). None: anyone else, or it can't tell."""
-    if data[:4] in LIFI_SWAPS and len(data) >= 4 + 32 * 5 and _aarg(data, 3) == safe:
-        return 0
-    try:
-        o = 4 + int.from_bytes(_arg(data, 0), "big")
-        # BridgeData: receiver (field 5), destinationChainId (7), hasDestinationCall (9) must be false: a call
-        # on the far chain can send the money on to anyone
-        if o + 320 <= len(data) and hx(data[o + 172:o + 192]) == safe and not any(data[o + 288:o + 320]):
-            far = int.from_bytes(data[o + 224:o + 256], "big")
-            return far if far >> 32 == 0 else None
-    except Exception:
-        pass
-    return None
-
 
 
 def _roles(tx, sel):
@@ -190,7 +167,7 @@ def describe(tx):
         return "Danger", [("can take all", RED, BIG)] + _addr_lines("", to, RED)[1:]
     if not data:
         return "Fee" if to == RELAY else "Send", out + [_bigv(tx, tx["value"])] + _who(to, safe)
-    if tx["value"] and to not in ROUTERS:
+    if tx["value"]:
         out.append(("+ %s %s" % (amount(tx["value"], 18), coin(tx)), RED))
     if to == MODULE_FACTORY and sel == "f1ab873c" and _aarg(data, 0) == ROLES_COPY and len(data) >= 100 and \
             not int.from_bytes(_arg(data, 2), "big") and _bytes_at(data[4:], int.from_bytes(_arg(data, 1), "big")) == _init(safe):
@@ -208,14 +185,6 @@ def describe(tx):
         if isinstance(c, tuple):
             return c
         why = c
-    if to in ROUTERS:
-        far = _lifi_to(data, safe) if to == LIFI else None     # a Uniswap call with no descriptor: can't tell
-        return ("Bridge" if far else "Swap"), out + [("via " + ROUTERS[to], INK)] + \
-            ([("pay", MUTED), _bigv(tx, tx["value"])] if tx["value"] else []) + \
-            ([("to this Safe", GREEN_D)] if far == 0 else
-             [("to this Safe on", INK), (CHAINS.get(far, "chain %d" % far), INK, BIG)] if far else
-             [("can't tell who gets it", RED)]) + \
-            [("trust " + ROUTERS[to], RED, BIG), ("can't check what you get", RED)]   # it reads who gets paid, not how much
     r = _roles(tx, sel) if sel in ROLES_SELS and to == roles_of(safe) else None
     if r:
         return r[0], out + r[1]
