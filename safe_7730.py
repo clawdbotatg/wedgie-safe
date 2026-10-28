@@ -2,7 +2,9 @@
 # The host sends a bundle with the transaction (safe_clear): {8: [token-information], 13: [transaction-info]}, every
 # structure signed with algorithm 4, a Merkle proof to a root built into this app (safe_roots.py, made by
 # wedgie-dev wire/release.py from the public registry). Root "a": descriptors an auditor we trust signed (Cyfrin),
-# and tokens. Root "b": the rest of the registry, shown as "not audited". Nothing here trusts the host: a structure
+# and tokens. Root "b": the rest of the registry, shown as "not audited". Root "c": clear-review's robot review
+# (github.com/clawdbotatg/clear-review): algorithm 5, a proof to the root of the round safe.py checked the signature
+# of (safe_review) and saved; shown as "robot-checked", never "audited". Nothing here trusts the host: a structure
 # whose proof doesn't reach a root is ignored. Loaded only while a question is up and a bundle came with it.
 #   read(tx, bundle) -> (title, lines) or a reason string it can't (the caller shows its red page with the reason)
 #   items(tx, bundle) -> (intent, owner, trust, [(label, text, kind)]): the same before it's drawn (tests)
@@ -10,6 +12,51 @@ import binascii, hashlib
 import safe_wire as w
 import safe_roots as R
 import safe_icons as I
+
+# clear-review's key (its clear-review.pub): only rounds it signed are taken
+REVIEW_KEY = (0x6547ba38ee30aa55b77c7308f93d5e70def2def67bc9ffff458f511e669a25de,
+              0x268adb3b274a9cdc9783cbc89302566529b52140523e419f51ba3fbf5ed9dac9)
+_review = None          # (round, root) safe.py saved from a signed clear-review round; (0, b"") for none
+
+
+def review():
+    global _review
+    if _review is None:
+        import save
+        v = save.load("review", None)
+        _review = (v["round"], binascii.unhexlify(v["root"])) if v else (0, b"")
+    return _review
+
+
+def take_review(m):
+    """{"round","registry","root","signature"}: a signed clear-review round. Checked with REVIEW_KEY once and saved;
+    an older round than the saved one is refused. -> the round now saved."""
+    global _review
+    rnd = m.get("round")
+    reg, root, sig = (binascii.unhexlify(str(m.get(k) or "")) for k in ("registry", "root", "signature"))
+    if not isinstance(rnd, int) or not 0 < rnd < 1 << 32 or len(reg) != 20 or len(root) != 32 or len(sig) != 64:
+        raise ValueError("bad round")
+    have, saved = review()
+    if rnd < have or rnd == have and root != saved:
+        raise ValueError("older than round %d" % have)
+    if rnd == have:
+        return have
+    dg = hashlib.sha256(b"clear-review/v1\x00" + rnd.to_bytes(4, "big") + reg + root).digest()
+    r, s = int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")
+    x, y = REVIEW_KEY
+    import wedgie as W, sys
+    ok = W.chip_verify(dg, r, s, x, y) if hasattr(W, "chip_verify") else False
+    if not ok:
+        import p256
+        ok = p256.verify(x, y, dg, r, s)
+        sys.modules.pop("p256", None)
+    if not ok:
+        raise ValueError("bad signature")
+    import save
+    save.store("review", {"round": rnd, "root": binascii.hexlify(root).decode()})
+    _review = None
+    return rnd
+
 
 MAX_DEPTH = 1           # calldata inside calldata: one level, the spec's minimum
 
@@ -34,9 +81,10 @@ def _map(b, i):
     return out
 
 
-def trust(b, j):
-    """Which root the signed structure at b[j] reaches: "a", "b", or None. Hashed where it lies: a 5 KB descriptor
-    copied whole needs 5 KB in one piece, which a busy heap may not have (w.signed_message, done in place)."""
+def trust(b, j, key=None):
+    """Which root the signed structure at b[j] reaches: "a", "b", "c", or None. Hashed where it lies: a 5 KB descriptor
+    copied whole needs 5 KB in one piece, which a busy heap may not have (w.signed_message, done in place).
+    key: the (chain, address, selector) it was found under, which a "c" leaf is over."""
     n, i = w.array(b, j)
     if n < 2:
         return None
@@ -46,8 +94,22 @@ def trust(b, j):
     if not isinstance(env, list) or len(env) != 5:
         return None
     proof = env[4]
-    if env[0] != 4 or env[3] != b"" or not isinstance(proof, list) or len(proof) > 32:
+    if env[0] not in (4, 5) or env[3] != b"" or not isinstance(proof, list) or len(proof) > 32:
         return None
+    if env[0] == 5:                     # clear-review: leaf over chain, address, selector and the structure's hash
+        rnd, root = review()
+        if not rnd or env[1] != rnd or env[2] != 0 or not key or len(key) != 3:
+            return None
+        c, a, s = key
+        if not isinstance(c, int) or not isinstance(a, bytes) or len(a) != 20 or not isinstance(s, bytes) or len(s) != 4:
+            return None
+        h = hashlib.sha256(memoryview(b)[j:i]).digest()
+        h = hashlib.sha256(b"\x00" + c.to_bytes(8, "big") + a + s + h).digest()
+        for p in proof:
+            if not isinstance(p, bytes) or len(p) != 32:
+                return None
+            h = hashlib.sha256(b"\x01" + (p + h if p < h else h + p)).digest()
+        return "c" if h == root else None
     h = hashlib.sha256(b"\x00")
     h.update(memoryview(b)[j:i])
     h.update(w.dumps(env[:3]))
@@ -88,7 +150,7 @@ class Ctx:
                     break
                 k = w.item_end(b, k)
             if ok:
-                t = trust(b, j)
+                t = trust(b, j, key)
                 if t:
                     return j, t
         return None, None
@@ -548,6 +610,8 @@ def read(tx, bundle):
         add(*x)
     if owner:
         lines.append(("by " + owner, MUTED))
-    if t != "a":
+    if t == "c":
+        lines.append(("robot-checked, not audited", MUTED))
+    elif t != "a":
         lines.append(("not audited", RED))
     return intent[:30], lines
