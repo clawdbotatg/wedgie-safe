@@ -63,12 +63,15 @@ def usd(s):
 
 
 def _txhash(tx):
-    """sha256 of "<from>\n<to>\n<value>\n<data>" (clear-sim's SPEC.md), worked out here from what gets signed."""
+    """sha256 of "<from>\n<to>\n<value>\n<data>", then "\n1" for a batch (a DELEGATECALL to Safe's MultiSend,
+    clear-sim's SPEC.md), worked out here from what gets signed."""
     h = hashlib.sha256()
     h.update(("%s\n%s\n%d\n0x" % (tx["safe"].lower(), tx["to"].lower(), tx["value"])).encode())
     d = tx["data"]
     for i in range(0, len(d), 256):
         h.update(binascii.hexlify(d[i:i + 256]))
+    if tx["operation"]:
+        h.update(b"\n1")
     return binascii.hexlify(h.digest()).decode()
 
 
@@ -114,11 +117,12 @@ def pages(tx, sim, who, ch, info):
     owner, trust, minimum = info or ("", None, None)
     eth = [c for c in ch if c[0] == "eth"]
     sent = -eth[0][3] if eth and eth[0][3] < 0 else 0
+    value = tx.get("out", tx["value"])              # a batch: what all its calls send (safe.confirm)
     got = [c for c in ch if c[3] > 0 and c[0] != "eth"]
     warns = []
     if sim["ok"] != "ok":
         warns.append("it fails if sent now")
-    if sent > tx["value"]:                          # less is fine: change sent back
+    if sent > value:                                # less is fine: change sent back
         warns.append("more ETH out than the tx's")
     if minimum is not None and got and got[0][3] < minimum:
         warns.append("less than the tx's minimum")
@@ -126,7 +130,8 @@ def pages(tx, sim, who, ch, info):
         warns.append("contract not audited")
     to = tx["to"]
     ch = sorted(ch, key=lambda c: c[3])            # out first, then in
-    main = [((owner or "a contract")[:13] + " " + to[:6] + ".." + to[-4:], MUTED)]
+    main = [("a batch of %d" % tx["calls"], MUTED) if tx.get("calls") else
+            ((owner or "a contract")[:13] + " " + to[:6] + ".." + to[-4:], MUTED)]
     for c in ch:
         main.append((("+" if c[3] > 0 else "-") + short(abs(c[3]), c[2]) + " " + c[1], GREEN_D if c[3] > 0 else INK, BIG))
         if c[4]:
@@ -141,8 +146,8 @@ def pages(tx, sim, who, ch, info):
         if c[4]:
             ls.append((usd(c[4]), MUTED))
         if c[0] == "eth" and c[3] < 0:
-            ls.append(("= the tx's value" if sent == tx["value"] else "more than the tx's!" if sent > tx["value"] else
-                       "tx's value, less change", RED if sent > tx["value"] else GREEN_D))
+            ls.append(("= the tx's value" if sent == value else "more than the tx's!" if sent > value else
+                       "tx's value, less change", RED if sent > value else GREEN_D))
         if c[3] > 0 and minimum is not None:
             ls.append(("tx's minimum %s: %s" % (short(minimum, c[2]), "ok" if c[3] >= minimum else "LOW"),
                        GREEN_D if c[3] >= minimum else RED))
