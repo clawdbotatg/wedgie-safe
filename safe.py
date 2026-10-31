@@ -574,9 +574,7 @@ def draw_home():
     else:
         _draw([("No key", INK, BIG)], 90, 180)
     if note:
-        d.center_text(note[:ui.COLS_SMALL], 216 if state == "ok" else 170, MUTED)
-    if state not in ("none", "lock"):   # which app and firmware, for a report (Austin, 10-31)
-        d.center_text("v%s  firmware %s" % (FW[5:], W.VERSION), 230, GREY)
+        d.center_text(note[:ui.COLS_SMALL], 226 if state == "ok" else 170, MUTED)
     if state == "none":
         ui.buttons(d, "make a key", "not now")
     elif state == "lock":
@@ -903,8 +901,7 @@ def on_sign(mid, t, again_ok=True, fresh=False):
                                              "out of memory: again on a clean heap"):     # the extras (a real wedgie,
                         return          # safe-47, an IW swap: MemoryError, 1280 bytes); then a restart on a clean heap
                     raise
-                tx["sim"] = tx["clear"] = None  # both at once: the screens kept a try longer, a real wedgie (safe-56,
-                                                # a guardian add on wedgie.dev) said memory allocation failed
+                tx["sim"] = tx["clear"] = None
                 _unclear()
                 _lend()
     except ValueError as e:             # a bad batch, a DELEGATECALL: nothing on screen to say yes to
