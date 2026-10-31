@@ -838,7 +838,10 @@ def _replay():
         os.remove(AGAIN)
     if a:
         pieces, have = [data], len(data)
-        on_sign(a.get("id"), a.get("tx"), False)
+        try:
+            on_sign(a.get("id"), a.get("tx"), False)
+        except Exception as e:          # answered, as pump does: not out of run()
+            W.failed(a.get("id"), e)
 
 
 def on_sign(mid, t, again_ok=True):
