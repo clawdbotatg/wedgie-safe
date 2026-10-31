@@ -16,6 +16,13 @@ NAMES = {RELAY: "the Instant relay"}
 ROUTERS = {"0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": "LI.FI",
            "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap",     # SwapRouter02, Base
            "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "Uniswap"}     # SwapRouter02, Ethereum
+# lending: an approval to one names it (Instant Wallet's Earn and Borrow; Base and Ethereum)
+LENDERS = {"0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb": "Morpho",
+           "0xa238dd80c259a72e81d7e4664a9801593f98d1c5": "Aave", "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2": "Aave",
+           "0xb125e6687d4313864e53df431d5425969c15eb2f": "Compound", "0x46e6b214b524310239732d51387075e0e70970bf": "Compound",
+           "0xc3d688b66703497daa19211eedff47f25384cdc3": "Compound", "0x3afdc9bca9213a35503b077a6072f3d0d5ab0840": "Compound",
+           "0xa17581a9e3356d9a858b789d68b4d866e593ae94": "Compound",
+           "0x3128a0f7f0ea68e7b7c9b00afa7e41045828e858": "Spark", "0xbc65ad17c5c0a2a4d159fa5a503f4992c7b545fe": "Spark"}
 # "this Safe" calling itself (owners, threshold, modules) is read with the descriptor at this address
 # (wedgie-dev descriptors/safe/calldata-ThisSafe.json): a Safe is a proxy at its own address on every chain
 THIS_SAFE = "0x5afe5afe5afe5afe5afe5afe5afe5afe5afe5afe"
@@ -52,7 +59,7 @@ def name(a, safe, own=False):
     s = getattr(A, "signer", None)
     if s and a == s.lower():
         return "THIS wedgie"
-    n = MODULES.get(a) or NAMES.get(a) or ROUTERS.get(a)
+    n = MODULES.get(a) or NAMES.get(a) or ROUTERS.get(a) or LENDERS.get(a)
     if n:
         return n
     if own and a == roles_of(safe):
