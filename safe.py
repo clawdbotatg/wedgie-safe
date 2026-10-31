@@ -43,7 +43,7 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREY, GREEN_D, RED
 
-FW = "safe-57"         # and "version" in wedgie.json: the site shows it (v57)
+FW = "safe-58"         # and "version" in wedgie.json: the site shows it (v58)
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
