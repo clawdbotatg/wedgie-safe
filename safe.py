@@ -608,9 +608,10 @@ def _card(safe):
             d.text(ch, x + 8 * j, y, WHITE if n < 6 or n >= 38 else GREY)
 
 
-def _screen(head, lines, yes, k, foot="", safe=None, nav=False):
+def _screen(head, lines, yes, k, foot="", safe=None, nav=False, wait=False):
     """One page of the question: which Safe in a card at the top, the action big, its lines, the chain small
-    at the bottom. True on a real A, False on Y or no answer; nav: "up" or "down" on the d-pad."""
+    at the bottom. True on a real A, False on Y or no answer; nav: "up" or "down" on the d-pad (left is up,
+    right is down). wait: green is grey (pages not seen yet)."""
     d.fill(WHITE)
     if safe:
         _card(safe)
@@ -620,7 +621,7 @@ def _screen(head, lines, yes, k, foot="", safe=None, nav=False):
     _draw(lines, 76, 170, sum(_h(l, True) for l in lines) <= ROOM)    # the big blockie wherever it fits
     if foot:
         d.center_text(foot[:ui.COLS_SMALL], 172, MUTED)
-    ui.buttons(d, yes, "no")
+    ui.buttons(d, yes, "no", wait)
     d.show()
     k.pressed()                         # a press made before this page was up doesn't answer it
     t0 = time.ticks_ms()
@@ -628,8 +629,8 @@ def _screen(head, lines, yes, k, foot="", safe=None, nav=False):
         for kk in k.pressed():          # nor one in its first SETTLE ms: a press meant for what was there (audit 10-18)
             if kk in ("A", "Y") and time.ticks_diff(time.ticks_ms(), t0) >= SETTLE:
                 return kk == "A"
-            if nav and kk in ("up", "down"):
-                return kk
+            if nav and kk in ("up", "down", "left", "right"):
+                return "up" if kk in ("up", "left") else "down"
         time.sleep_ms(20)
     return False
 
@@ -759,27 +760,22 @@ def confirm(tx):
             main.remove(usd.pop())
         out[0] = (pages[0][0], main)
         return _browse([(h, part) for h, ls in out for part in _fit(ls)] + pages, k, foot, sf)
-    n = len(pages)
-    for i, (head, lines) in enumerate(pages):
-        last = i == n - 1
-        if not _screen(head, lines, "sign" if last else "next", k,
-                       "%d/%d %s" % (i + 1, n, foot) if n > 1 else foot, sf):
-            return False
-    return True
+    return _browse(pages, k, foot, sf)
 
 
 def _browse(pages, k, foot, sf):
-    """The short page first, the d-pad's up and down through the rest. Red says no on any page. Green goes to the
-    next page not seen yet, and signs once every page has been: the short page doesn't say who gets paid, or what
-    else the call does, so every line is still seen before the press (as without a simulation)."""
+    """The first page, the joystick (up/down or left/right) through the rest. Red says no on any page. Green only
+    signs, and only once every page has been seen (grey till then): looking and signing are two different
+    buttons, so a fast thumb on green can't page through and sign in one go (Austin, 11-03)."""
     i, n, seen = 0, len(pages), 1
     while True:
         head, lines = pages[i]
         ok = seen >= n
-        r = _screen(head, lines, "sign" if ok else "next", k,
-                    "%d/%d %s" % (i + 1, n, "down: more" if i < n - 1 else foot), sf, True)
-        if r is True and not ok:
-            i = seen
+        r = _screen(head, lines, "sign", k, "%d/%d %s" % (i + 1, n, "down: more" if i < n - 1 else foot)
+                    if n > 1 else foot, sf, True, not ok)
+        if r is True:
+            if ok:
+                return True
         elif r == "down":
             i = min(i + 1, n - 1)
         elif r == "up":

@@ -78,16 +78,13 @@ def sign_message(S, mid, m):
     mh, h = hashes(S, chain, safe, b)
     lines = [(l, S.INK) for l in wrap(text, S.ui.COLS_SMALL)]
     pages = S._fit(lines)
-    n = len(pages)
     foot = S.CHAINS.get(chain, "chain %d" % chain)
     k = S.L.Keys(physical=True)
     k.pressed()
-    for i, part in enumerate(pages):
-        if not S._screen("Sign this text?", part, "sign" if i == n - 1 else "next", k,
-                         "%d/%d %s" % (i + 1, n, foot) if n > 1 else foot, safe):
-            S.note = "said no"
-            W.send({"id": mid, "type": "refused", "safeMessageHash": S.hx(h)})
-            return
+    if not S._browse([("Sign this text?", part) for part in pages], k, foot, safe):
+        S.note = "said no"
+        W.send({"id": mid, "type": "refused", "safeMessageHash": S.hx(h)})
+        return
     S.ui.progress("Signing", "in the chip", False)
     auth, dg = S.webauthn_digest(h)
     r, s = S.sign(dg)
