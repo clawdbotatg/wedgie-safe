@@ -2,7 +2,7 @@
 # The host asks a clear-sim server (github.com/clawdbotatg/clear-sim; sim.wedgie.dev) with a nonce this wedgie
 # picked (safe_nonce), and sends the signed answer with the tx (tx["sim"]). This checks the signature against the
 # keys below, the nonce, and the answer against the tx: ETH out must be the tx's value, a token in at least the
-# descriptor's minimum. A simulator can still lie about names and prices: the short page says whose word it is.
+# descriptor's minimum. Only signed servers count; no page says which one (Austin, 11-04).
 # Loaded only while a question is up (safe.confirm).
 #   check(tx, sim, nonce) -> (server, changes) or raises ValueError; pages(tx, sim, server, changes, info) ->
 #   ([(head, lines)], [warnings]), info from safe._sim_info. safe.confirm runs them after the usual pages are read,
@@ -154,7 +154,7 @@ def pages(tx, sim, who, ch, info):
         if c[0] != "eth":
             ls.append((c[0], MUTED, ADDR))
         out.append(("You send" if c[3] < 0 else "You get", ls))
-    out.append(("Checked", [("simulated at block", MUTED), (str(sim["block"]), INK), ("by " + who, INK),
-                            ("names, prices: its word", MUTED)] + [(x, RED) for x in warns[:3]]))
+    if warns:                                       # no page saying who simulated it (Austin, 11-04): only what's wrong
+        out.append(("Warning", [(x, RED) for x in warns[:3]]))
     return out, warns
 

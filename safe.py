@@ -746,15 +746,12 @@ def confirm(tx):
                 sys.modules.pop("safe_sim", None)
                 gc.collect()
     if sim:
-        who = sim[0]
         n = len(warns) + sum(1 for _, ls in pages if any(l[1] == RED for l in ls))
         main = out[0][1]
-        main.append(("! %s  (down)" % warns[0] if n == 1 and warns else "! %d warnings (down)" % n if n else
-                     "says %s (down)" % who[:ui.COLS_SMALL - 12], RED if n else GREEN_D))
+        if n:
+            main.append(("! %s  (down)" % warns[0] if n == 1 and warns else "! %d warnings (down)" % n, RED))
         if sum(_h(l) for l in main) > ROOM:    # the contract is on its own page too
             main.pop(0)
-        if sum(_h(l) for l in main) > ROOM and not n:      # and who simulated it (the Checked page)
-            main.pop()
         usd = [l for l in main if l[1] == MUTED]
         while sum(_h(l) for l in main) > ROOM and usd:    # still too tall: dollars go (on each page)
             main.remove(usd.pop())
