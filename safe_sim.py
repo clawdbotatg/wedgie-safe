@@ -1,12 +1,12 @@
-# A signed simulation: one short page (what goes out, what comes in, in dollars) with the usual pages under it.
+# A signed simulation: what goes out and comes in (and in dollars), under the first of the usual pages.
 # The host asks a clear-sim server (github.com/clawdbotatg/clear-sim; sim.wedgie.dev) with a nonce this wedgie
 # picked (safe_nonce), and sends the signed answer with the tx (tx["sim"]). This checks the signature against the
 # keys below, the nonce, and the answer against the tx: ETH out must be the tx's value, a token in at least the
 # descriptor's minimum. Only signed servers count; no page says which one (Austin, 11-04).
 # Loaded only while a question is up (safe.confirm).
 #   check(tx, sim, nonce) -> (server, changes) or raises ValueError; pages(tx, sim, server, changes, info) ->
-#   ([(head, lines)], [warnings]), info from safe._sim_info. safe.confirm runs them after the usual pages are read,
-#   puts those under these, and ends the short page.
+#   (lines, [warnings]), info from safe._sim_info. safe.confirm puts the lines under the first page (Austin, 11-04:
+#   what it does, then the amounts, warnings in red, as few pages as can be).
 import hashlib, binascii, sys
 
 # clear-sim servers this app trusts, by name: (x, y) of each P-256 key (GET the server for its key)
@@ -110,10 +110,11 @@ def dec(n, d):
 
 
 def pages(tx, sim, who, ch, info):
-    """The short page (its title and last line left to safe.confirm) and the detail pages, and the warnings.
-    info: (owner, trust, minimum) from the descriptor, or None."""
+    """The simulation's lines, for under the first page (what the tx says it does, read from its bytes): what
+    goes out and comes in, one line each, then any warning in red. (lines, warnings). info: (owner, trust,
+    minimum) from the descriptor, or None: then each token's address too (no descriptor named it)."""
     from ui import INK, MUTED, GREEN_D, RED, COLS_SMALL
-    from safe import BIG, ADDR
+    from safe import ADDR
     owner, trust, minimum = info or ("", None, None)
     eth = [c for c in ch if c[0] == "eth"]
     sent = -eth[0][3] if eth and eth[0][3] < 0 else 0
@@ -128,33 +129,13 @@ def pages(tx, sim, who, ch, info):
         warns.append("less than the tx's minimum")
     if trust and trust != "a":
         warns.append("contract not audited")
-    to = tx["to"]
-    ch = sorted(ch, key=lambda c: c[3])            # out first, then in
-    main = [("a batch of %d" % tx["calls"], MUTED) if tx.get("calls") else
-            ((owner or "a contract")[:13] + " " + to[:6] + ".." + to[-4:], MUTED)]
-    for c in ch:
-        main.append((("+" if c[3] > 0 else "-") + short(abs(c[3]), c[2]) + " " + c[1], GREEN_D if c[3] > 0 else INK, BIG))
-        if c[4]:
-            main.append((usd(c[4]), MUTED))
-    out = [("", main)]
-    for c in ch:
-        full = dec(abs(c[3]), c[2]) if c[2] >= 0 else str(abs(c[3]))
-        if len(full) + 1 + len(c[1]) <= 15:
-            ls = [(full + " " + c[1], INK, BIG)]
-        else:
-            ls = [(full[i:i + COLS_SMALL], INK) for i in range(0, len(full), COLS_SMALL)][:3] + [(c[1], INK)]
-        if c[4]:
-            ls.append((usd(c[4]), MUTED))
-        if c[0] == "eth" and c[3] < 0:
-            ls.append(("= the tx's value" if sent == value else "more than the tx's!" if sent > value else
-                       "tx's value, less change", RED if sent > value else GREEN_D))
-        if c[3] > 0 and minimum is not None:
-            ls.append(("tx's minimum %s: %s" % (short(minimum, c[2]), "ok" if c[3] >= minimum else "LOW"),
-                       GREEN_D if c[3] >= minimum else RED))
-        if c[0] != "eth":
+    ls = [("simulated:", MUTED)]
+    for c in sorted(ch, key=lambda c: c[3]):        # out first, then in
+        n = ("+" if c[3] > 0 else "-") + (dec(abs(c[3]), c[2]) if c[2] >= 0 else str(abs(c[3])))
+        if len(n) + 1 + len(c[1]) > COLS_SMALL:    # every digit if it fits, else 3
+            n = ("+" if c[3] > 0 else "-") + short(abs(c[3]), c[2])
+        t, u = n + " " + c[1], usd(c[4])
+        ls.append((t + "  " + u if u and len(t) + 2 + len(u) <= COLS_SMALL else t, GREEN_D if c[3] > 0 else INK))
+        if c[0] != "eth" and info is None:
             ls.append((c[0], MUTED, ADDR))
-        out.append(("You send" if c[3] < 0 else "You get", ls))
-    if warns:                                       # no page saying who simulated it (Austin, 11-04): only what's wrong
-        out.append(("Warning", [(x, RED) for x in warns[:3]]))
-    return out, warns
-
+    return ls + [("! " + x, RED) for x in warns[:3]], warns

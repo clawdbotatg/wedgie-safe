@@ -714,12 +714,12 @@ def confirm(tx):
             del acts
             del sys.modules["safe_read"]
             _unclear()
-    # a signed simulation: a short page first, the usual under it. A DELEGATECALL got here only as Safe's own MultiSend
+    # a signed simulation: its amounts under the first page (safe_sim.pages). A DELEGATECALL got here only as Safe's own MultiSend
     # of plain calls (safe_read.batch, above): clear-sim runs it as the Safe would (its hash says so, safe_sim._txhash)
     sim = bool(tx["sim"])
     # A page that doesn't fit goes on over more pages: every line is seen before the press (wedgie-dev 10-15:
     # an unknown token's recipient fell off the bottom).
-    pages = [(head, part) for head, lines in pages for part in _fit(lines)]
+    raw, pages = pages, [(head, part) for head, lines in pages for part in _fit(lines)]
     if not pages:                       # nothing on the screen: never a signature (audit 10-18)
         raise ValueError("nothing to show")
     if sim:
@@ -729,7 +729,7 @@ def confirm(tx):
                 sim = safe_sim.check(tx, tx["sim"], nonce)
                 if not sim[1]:          # nothing moves (an approval, a vote): the usual pages say it better
                     raise ValueError("nothing moves")
-                out, warns = safe_sim.pages(tx, tx["sim"], sim[0], sim[1], info)
+                ls, warns = safe_sim.pages(tx, tx["sim"], sim[0], sim[1], info)
                 break
             except MemoryError:
                 sys.modules.pop("safe_sim", None)
@@ -745,18 +745,9 @@ def confirm(tx):
             finally:
                 sys.modules.pop("safe_sim", None)
                 gc.collect()
-    if sim:
-        n = len(warns) + sum(1 for _, ls in pages if any(l[1] == RED for l in ls))
-        main = out[0][1]
-        if n:
-            main.append(("! %s  (down)" % warns[0] if n == 1 and warns else "! %d warnings (down)" % n, RED))
-        if sum(_h(l) for l in main) > ROOM:    # the contract is on its own page too
-            main.pop(0)
-        usd = [l for l in main if l[1] == MUTED]
-        while sum(_h(l) for l in main) > ROOM and usd:    # still too tall: dollars go (on each page)
-            main.remove(usd.pop())
-        out[0] = (pages[0][0], main)
-        return _browse([(h, part) for h, ls in out for part in _fit(ls)] + pages, k, foot, sf)
+    if sim:                             # one flow: what it does (the first page), the amounts under it, then the rest
+        raw[0] = (raw[0][0], raw[0][1] + [GAP] + ls)
+        return _browse([(h, part) for h, l in raw for part in _fit(l)], k, foot, sf)
     return _browse(pages, k, foot, sf)
 
 
