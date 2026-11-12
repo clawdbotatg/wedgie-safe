@@ -331,8 +331,8 @@ def _text(ctx, call, param, val, i):
         if tok is not None and any(_same(tok, x, 5) for x in natives):
             tok = None
             ticker, d, pic = ctx.coin, 18, I.of(ctx.coin)
-        elif tok is None:               # no token named: the number, red (the spec's "Unknown token")
-            return "%d (unknown token)" % n, "warn"
+        elif tok is None or len(tok) == 32 and int.from_bytes(tok[:12], "big"):
+            return "%d (unknown token)" % n, "warn"     # no token named, or not an address (a Solana mint): the number, red
         else:
             t = ctx.token(chain, _raw(_addr(tok)))
             if t is None:
@@ -361,7 +361,7 @@ def _text(ctx, call, param, val, i):
         for e in param[2]:
             if e[0] == n:
                 return e[1], None
-        raise Bad("enum value %d not in the descriptor" % n)
+        return str(n), "warn"           # a value the descriptor has no name for: the number, red (the registry's tests)
     if k == 8:                          # trusted name: none are sent; the ones the wedgie knows itself (safe_book)
         if len(param) > 5 and param[5] == 1:
             raise Bad("interoperable address")
@@ -374,11 +374,20 @@ def _text(ctx, call, param, val, i):
         n = safe_book.name(a, safe, _hex(call.to) == safe)
         if param[4]:                    # the descriptor expects the sender here (a swap's recipient): anyone else, red
             return (n or a), "else"
+        if not n and 4 in (param[2] or ()):         # the descriptor says it's a token: its ticker, if a list knows it
+            t = ctx.token(call.chain, _raw(a))
+            if t:
+                return t[0], None
         return (n, "me" if n == "THIS wedgie" else "named") if n else (a, "addr")
     if k == 10:                         # token ticker
         if any(_same(val, x, 5) for x in (param[2] or [])):
             return ctx.coin, None
-        t = ctx.token(call.chain, _raw(_addr(val)))
+        if len(val) == 32 and int.from_bytes(val[:12], "big"):      # not an address (a Solana mint): its bytes
+            return _hex(val), "addr?"
+        chain = call.chain
+        if len(param) > 3 and param[3]:     # a token on another chain (a bridge's far side)
+            chain = _int(_pick(_values(ctx, call, param[3]), i), 1, None)
+        t = ctx.token(chain, _raw(_addr(val)))
         if t is None:
             return _addr(val), "addr?"
         return t[0], None
@@ -598,8 +607,8 @@ def read(tx, bundle):
         elif kind == "token?":              # a token no list knows: the number, and whose
             n, a = text.rsplit(" of ", 1)
             lines.extend([(n, RED), ("of a token it doesn't know", RED), (a, RED, ADDR)])
-        elif kind == "addr?":
-            lines.extend([("a token it doesn't know", RED), (text, RED, ADDR)])
+        elif kind == "addr?":               # 20 bytes: an address; more (a Solana mint): its bytes, all of them
+            lines.extend([("a token it doesn't know", RED), (text, RED, ADDR) if len(text) == 42 else (text, RED)])
         elif kind == "warn":
             lines.append((text, RED))
         elif kind == "note":
@@ -608,6 +617,15 @@ def read(tx, bundle):
             lines.append((text, INK))
     for x in its:
         add(*x)
+    wide, lines = lines, []                 # a line wider than the screen (a 32-byte value, a long label): on as many
+    for l in wide:                          # lines as it needs, never cut (10-27 rule: all of it or the red page)
+        s = l[0]
+        while len(l) == 2 and len(s) > 28:
+            k = s.rfind(" ", 0, 29)
+            k = k if k > 0 else 28
+            lines.append((s[:k], l[1]))
+            s = s[k:].lstrip()
+        lines.append((s,) + tuple(l[1:]))
     if owner:
         lines.append(("by " + owner, MUTED))
     if t == "c":
