@@ -462,6 +462,13 @@ def _field(ctx, call, f, out, pick=None):
         out.append((label, t, kind))
 
 
+def _carries(ctx, amt, out):
+    """The ETH a call that can't be read carries, red."""
+    if amt:
+        import safe as A
+        out.append(("", "+ %s %s" % (A.amount(amt, 18), ctx.coin), "warn"))
+
+
 def _calldata(ctx, call, label, param, data, i, out):
     callee = _raw(_addr(_pick(_values(ctx, call, param[2]), i)))
     if param[4]:                        # a selector given apart from the data
@@ -481,13 +488,20 @@ def _calldata(ctx, call, label, param, data, i, out):
         if op != 1:
             out.append(("", {2: "DELEGATECALL: can do anything", 3: "creates a contract", 4: "creates a contract",
                              5: "CALLCODE: can do anything"}.get(op, "an unknown operation"), "warn"))
+    if not len(data):                   # no data: ETH sent to it and nothing else (a batch's plain send)
+        import safe as A
+        sub = [("", "%s %s" % (A.amount(amt, 18), ctx.coin), _amount(I.of(ctx.coin)))] if amt else []
+        out.append((label, ("call", "Send" if amt else "Call with no data", None, sub + [("To", _hex(callee), "addr")], callee), "call"))
+        return
     if call.depth >= MAX_DEPTH or len(data) < 4:
         out.append((label, ("call", None, None, None, callee), "call"))
+        _carries(ctx, amt, out)
         return
     inner = Call(callee, bytes(data), amt, sender, chain, call.depth + 1)
     j, t = _find(ctx, chain, callee, bytes(data[:4]))
     if j is None:
         out.append((label, ("call", None, None, None, callee), "call"))
+        _carries(ctx, amt, out)
         return
     sub = []
     for fi in w.elements(ctx.b, w.at(ctx.b, j, 10)):
