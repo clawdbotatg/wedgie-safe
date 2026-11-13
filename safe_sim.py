@@ -75,19 +75,46 @@ def _txhash(tx):
     return binascii.hexlify(h.digest()).decode()
 
 
+def _row(c):
+    """One change as a clear-sim server writes it (SPEC.md), or ValueError. The signed text is these fields joined
+    by commas and newlines: a field that held one could hide a signed line (-5 ETH folded into the next token's
+    address: the signature passed and the screen said only +1 TOK; audit 11-13)."""
+    t, y, u = c["token"], c["symbol"], c["usd"]
+    d, n = int(c["decimals"]), int(c["amount"])
+    if not (isinstance(t, str) and isinstance(y, str) and isinstance(u, str)):
+        raise ValueError("a field isn't text")
+    if t != "eth" and not (len(t) == 42 and t[:2] == "0x" and all(x in "0123456789abcdefABCDEF" for x in t[2:])):
+        raise ValueError("bad token")
+    if not 0 < len(y) <= 12 or not all(x.isalpha() and x < "{" or x in "0123456789.$_-?" for x in y):
+        raise ValueError("bad symbol")
+    if not -1 <= d <= 36:
+        raise ValueError("bad decimals")
+    if u:                               # "-9.66", "1500.00"
+        a, _, b = (u[1:] if u[0] == "-" else u).partition(".")
+        if len(u) > 24 or not (a.isdigit() and (b.isdigit() or "." not in u)):
+            raise ValueError("bad usd")
+    return t, y, d, n, u
+
+
 def check(tx, sim, nonce):
-    """(server name, changes [(token, symbol, decimals, amount, usd)]), or raises ValueError."""
+    """(server name, changes [(token, symbol, decimals, amount, usd)]), or raises ValueError. The changes are the
+    ones that were signed, each field checked (_row), one line per token."""
     import wedgie as W
     if not nonce or sim.get("nonce") != nonce:
         raise ValueError("not for this question (nonce)")
     if sim.get("sig", "p256") != "p256":
         raise ValueError("not p256")
+    if sim["ok"] not in ("ok", "reverts"):
+        raise ValueError("bad result")
     ch = sim.get("changes") or []
     if len(ch) > 8:
         raise ValueError("too many changes")
-    text = "\n".join(["clear-sim v1", nonce, str(tx["chainId"]), _txhash(tx), str(int(sim["block"])), str(sim["ok"])] +
-                     [",".join((str(c["token"]), str(c["symbol"]), str(int(c["decimals"])), str(int(c["amount"])), str(c["usd"])))
-                      for c in ch])
+    ch = [_row(c) for c in ch]
+    for i, c in enumerate(ch):          # a second "eth" line would hide the first from the ETH-out check
+        if any(c[0].lower() == o[0].lower() for o in ch[:i]):
+            raise ValueError("a token twice")
+    text = "\n".join(["clear-sim v1", nonce, str(tx["chainId"]), _txhash(tx), str(int(sim["block"])), sim["ok"]] +
+                     [",".join((c[0], c[1], str(c[2]), str(c[3]), c[4])) for c in ch])
     dg = hashlib.sha256(text.encode()).digest()
     r, s = int(sim["r"], 16), int(sim["s"], 16)
     for name, (x, y) in KEYS.items():
@@ -97,7 +124,7 @@ def check(tx, sim, nonce):
             ok = p256.verify(x, y, dg, r, s)
         sys.modules.pop("p256", None)
         if ok:
-            return name, [(c["token"], c["symbol"], int(c["decimals"]), int(c["amount"]), c["usd"]) for c in ch]
+            return name, ch
     raise ValueError("no trusted simulator signed this")
 
 
