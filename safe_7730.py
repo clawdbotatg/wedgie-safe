@@ -58,7 +58,7 @@ def take_review(m):
     return rnd
 
 
-MAX_DEPTH = 1           # calldata inside calldata: one level, the spec's minimum
+MAX_DEPTH = 2           # calldata inside calldata inside calldata: a Safe batch, a router in it, the call the router makes
 
 
 class Bad(Exception):
