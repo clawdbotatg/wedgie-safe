@@ -129,7 +129,8 @@ class Ctx:
         self.tx, self.b, self.chain = tx, b, tx["chainId"]
         m = _map(b, 0)
         self.descs, self.tokens = m.get(13), m.get(8)
-        self.value_shown = False
+        self.value_shown = False        # the call being read says its own ETH (set back for each call inside)
+        self.worst = "a"                # the worst trust of the descriptors of calls inside
         self.small = False              # on the screen: optional fields left out
 
     def find(self, arr, key):
@@ -341,7 +342,8 @@ def _text(ctx, call, param, val, i):
             pic = I.at(chain, _addr(tok))
         if sp:
             return (sp.replace("{token}", ticker) if "{token}" in sp else sp + " " + ticker), _amount(pic)
-        if param[4] is not None and n >= param[4]:      # "!": red on an approval (read's RISKY)
+        if param[4] is not None and n >= param[4] or n >> 255:      # "!": red on an approval (read's RISKY); 2^255 and up is
+                                                                    # all of it whatever the descriptor says (audit 11-13)
             return "%s %s" % (param[5] or "Unlimited", ticker), _amount(pic) + "!"
         return "%s %s" % (A.amount(n, d), ticker), _amount(pic)
     if k == 3:                          # nft
@@ -503,9 +505,24 @@ def _calldata(ctx, call, label, param, data, i, out):
         out.append((label, ("call", None, None, None, callee), "call"))
         _carries(ctx, amt, out)
         return
-    sub = []
+    # the call inside is held to the same rules as the one outside (audit 11-13): its descriptor's trust counts (the
+    # page's last line is the worst of them), its own ETH is said if its fields don't say it, bytes after its
+    # arguments are said, and an approval inside is red like one outside
+    if t != "a" and ctx.worst != "b":
+        ctx.worst = t if t == "c" else "b"
+    sub, seen, ctx.value_shown = [], ctx.value_shown, False
     for fi in w.elements(ctx.b, w.at(ctx.b, j, 10)):
         _fieldat(ctx, inner, fi, sub)
+    if not ctx.value_shown:
+        _carries(ctx, amt, sub)
+    ctx.value_shown = seen
+    if w.extra_bytes(inner.cd):
+        sub.append(("", "+%d bytes at the end" % w.extra_bytes(inner.cd), "note"))
+    sel = bytes(data[:4])
+    if sel in RISKY:
+        sub = [(a, b, "addr!" if c == "addr" else c + "!" if c and c[:6] == "amount" and c[-1] == "!" else c) for a, b, c in sub]
+    if sel == BLIND:
+        sub.append(("", BLIND_SAYS, "warn"))
     out.append((label, ("call", w.load(ctx.b, w.at(ctx.b, j, 4)), w.load(ctx.b, w.at(ctx.b, j, 5)), sub, callee), "call"))
 
 
@@ -548,6 +565,10 @@ def items(tx, bundle, small=False):
         out.append(("", "+%d bytes at the end" % w.extra_bytes(call.cd), "note"))
     if tx["value"] and not ctx.value_shown:
         out.append(("", "+ %s %s" % (A.amount(tx["value"], 18), ctx.coin), "warn"))
+    if bytes(data[:4]) == BLIND:
+        out.append(("", BLIND_SAYS, "warn"))
+    if t == "a" or ctx.worst == "b":
+        t = t if ctx.worst == "a" else ctx.worst
     return w.load(ctx.b, w.at(ctx.b, j, 4)), w.load(ctx.b, w.at(ctx.b, j, 5)), t, out
 
 
@@ -570,9 +591,14 @@ def reads(tx):
     return out
 
 
-# approve, increaseAllowance; enableModule, setGuard, setFallbackHandler, setModuleGuard
+# approve, increaseAllowance; enableModule, setGuard, setFallbackHandler, setModuleGuard; setApprovalForAll,
+# Permit2's approve, permit (audit 11-13)
 RISKY = (b"\x09\x5e\xa7\xb3", b"\x39\x50\x93\x51", b"\x61\x0b\x59\x25", b"\xe1\x9a\x9d\xd9",
-         b"\xf0\x8a\x03\x23", b"\xe0\x68\xdf\x37")
+         b"\xf0\x8a\x03\x23", b"\xe0\x68\xdf\x37", b"\xa2\x2c\xb4\x65", b"\x87\x51\x7c\x45", b"\xd5\x05\xac\xcf")
+# approveHash(bytes32) on a Safe: it approves a transaction of that Safe by its hash alone. Nothing here can say
+# what that transaction does: said in red, on any Safe, outside or inside another call (audit 11-13)
+BLIND = b"\xd4\xd9\xbd\xcd"
+BLIND_SAYS = "a hash it can't read"
 
 
 def read(tx, bundle):
@@ -607,9 +633,9 @@ def read(tx, bundle):
                 add(*x)
         elif kind and kind[:6] == "amount":
             p = kind[6:].rstrip("!")
-            lines.append((text, RED if risky and kind[-1] == "!" else INK, BIG, int(p) if p else None))
-        elif kind == "addr":
-            lines.append((text, RED if risky else INK, ADDR))
+            lines.append((text, RED if kind[-2:] == "!!" or risky and kind[-1] == "!" else INK, BIG, int(p) if p else None))
+        elif kind == "addr" or kind == "addr!":     # "addr!", "amount..!!": in a risky call inside (_calldata)
+            lines.append((text, RED if risky or kind == "addr!" else INK, ADDR))
         elif kind == "else":                # someone other than this Safe where the Safe is expected
             lines.extend([(text, RED, ADDR) if text[:2] == "0x" else (text, RED), ("not this Safe!", RED)])
         elif kind == "safe":
