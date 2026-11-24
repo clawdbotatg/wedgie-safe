@@ -43,11 +43,15 @@ import save
 import ui
 from ui import WHITE, INK, MUTED, GREY, GREEN_D, RED
 
-FW = "safe-76"         # and "version" in wedgie.json: the site shows it (v59)
+FW = "safe-78"  # keep in sync with the app version in wedgie.json
+MIN_BRIGHTNESS = 5
 RP_ID = b"wedgie.dev"
 FIELDS = '"origin":"https://wedgie.dev"'
 ASK_MS = 120000
 SETTLE = 600        # ms a page is up before a press can answer it
+DEBUG_CAPTURE_MS = 120000
+DEBUG_CAPTURE_TYPES = ("debug_capture_start", "debug_capture_status", "debug_capture_frame", "debug_capture_stop")
+DEBUG_REVIEW_TYPES = ("safe_sign", "sol_sign")
 
 DOMAIN_TYPEHASH = binascii.unhexlify("47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218")
 SAFE_TX_TYPEHASH = binascii.unhexlify("bb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8")
@@ -86,6 +90,9 @@ signer = None       # its Safe owner address, "0x.." checksummed (safe_addr.py),
 note = ""           # one line under the home screen (the last thing that happened)
 sim_nonce = None    # the nonce the next tx's simulation must carry (safe_nonce), used up by the next safe_sign
 dirty = True
+debug_deadline = None
+debug_displayed = 0
+brightness = 100
 
 
 # ---- small helpers ----------------------------------------------------------------------------
@@ -557,6 +564,7 @@ def sign(digest):
 
 def draw_home():
     """The title, its Safe owner address (the same on every chain) as a big blockie and big text."""
+    global debug_displayed
     d.fill(WHITE)
     ui.band(d)
     ui.title(d, "Safe Signer", 42, 1)
@@ -573,13 +581,98 @@ def draw_home():
         _draw([("Swap the chip", RED, BIG), ("Its key is locked and", INK), ("isn't Safe Signer's.", INK)], 80, 180)
     else:
         _draw([("No key", INK, BIG)], 90, 180)
-    if note:
+    debug_displayed = debug_seconds()
+    if debug_displayed:
+        d.center_text("Capture %ds | Y stops" % debug_displayed, 226, INK)
+    elif note:
         d.center_text(note[:ui.COLS_SMALL], 226 if state == "ok" else 170, MUTED)
     if state == "none":
         ui.buttons(d, "make a key", "not now")
     elif state == "lock":
         ui.buttons(d, "lock it", "not now")
     d.show()
+
+
+def debug_seconds():
+    if debug_deadline is None:
+        return 0
+    return max(0, (time.ticks_diff(debug_deadline, time.ticks_ms()) + 999) // 1000)
+
+
+def stop_debug_capture():
+    global debug_deadline, dirty
+    if debug_deadline is not None:
+        debug_deadline = None
+        dirty = True
+
+
+def handle_debug_capture(mid, request):
+    global debug_deadline, dirty
+    if request == "debug_capture_stop":
+        stop_debug_capture()
+    elif request == "debug_capture_start" and not debug_seconds():
+        if state != "ok" or not W.SEALED or W.is_open():
+            W.send({"id": mid, "type": "error", "error": "Capture requires a sealed Safe Signer with an existing key"})
+            return
+        dirty = True
+        if ui.ask(d, "Share screen?", ["USB can see Home and", "one requested review.", "2 minutes. Y stops it."],
+                  yes="share screen", keys=keys):
+            debug_deadline = time.ticks_add(time.ticks_ms(), DEBUG_CAPTURE_MS)
+    elif request == "debug_capture_frame":
+        if not debug_seconds() or state != "ok" or not W.SEALED or W.is_open():
+            stop_debug_capture()
+            W.send({"id": mid, "type": "error", "error": "No active screen capture session"})
+            return
+        if dirty or debug_displayed != debug_seconds():
+            draw_home()
+            dirty = False
+        if not debug_seconds():
+            stop_debug_capture()
+            W.send({"id": mid, "type": "error", "error": "Screen capture session expired"})
+            return
+        W.shot(mid)
+        return
+    W.send({"id": mid, "type": "debug_capture_status", "seconds": debug_seconds()})
+
+
+def review_sender(mid, deadline):
+    """Share only review pages, only while the original physical permission is live."""
+    sequence = 0
+    enabled = True
+
+    def frame(drawn, window):
+        nonlocal sequence, enabled
+
+        def remaining():
+            now = time.ticks_ms()
+            return min(time.ticks_diff(deadline, now), window - time.ticks_diff(now, drawn))
+
+        if not enabled or not W.SEALED or W.is_open() or remaining() <= 0:
+            return
+        try:
+            sequence += 1
+            W.send({"id": mid, "type": "debug_review_page", "sequence": sequence, "timeout_ms": remaining()})
+            art = L.art_file(0, 240)
+            # Same RGB565 rows and envelope as wedgie.shot, with expiry checked between chunks.
+            try:
+                chunk = {"id": mid, "type": "shot", "n": 60, "w": 240, "h": 240, "fmt": "rgb565be"}
+                for i in range(60):
+                    if remaining() <= 0:
+                        break
+                    L.rows565(0, i * 4, 240, 4, art)
+                    chunk["i"] = i
+                    chunk["data"] = binascii.b2a_base64(L._ROWS).decode().strip()
+                    if remaining() <= 0:
+                        break
+                    W.send(chunk)
+            finally:
+                if art:
+                    art.close()
+        except Exception:
+            # Diagnostics cannot change the review outcome or retry the signing operation.
+            enabled = False
+
+    return frame
 
 
 def _checksum(a):
@@ -608,7 +701,7 @@ def _card(safe):
             d.text(ch, x + 8 * j, y, WHITE if n < 6 or n >= 38 else GREY)
 
 
-def _screen(head, lines, yes, k, foot="", safe=None, nav=False):
+def _screen(head, lines, yes, k, foot="", safe=None, nav=False, review=None):
     """One page of the question: which Safe in a card at the top, the action big, its lines, the chain small
     at the bottom. True on a real A, False on Y or no answer; nav: "up" or "down" on the d-pad (left is up,
     right is down)."""
@@ -625,6 +718,9 @@ def _screen(head, lines, yes, k, foot="", safe=None, nav=False):
     d.show()
     k.pressed()                         # a press made before this page was up doesn't answer it
     t0 = time.ticks_ms()
+    if review:
+        review(t0, ASK_MS)
+        k.pressed()                     # discard input while the optional frame was being sent
     while time.ticks_diff(time.ticks_ms(), t0) < ASK_MS:
         for kk in k.pressed():          # nor one in its first SETTLE ms: a press meant for what was there (audit 10-18)
             if kk in ("A", "Y") and time.ticks_diff(time.ticks_ms(), t0) >= SETTLE:
@@ -668,7 +764,7 @@ def _unclear():
     gc.collect()
 
 
-def confirm(tx):
+def confirm(tx, review=None):
     """The transaction on the screen, a page per action in a batch. True only on A through every page."""
     global sim_nonce
     k = L.Keys(physical=True)
@@ -747,11 +843,11 @@ def confirm(tx):
                 gc.collect()
     if sim:                             # one flow: what it does (the first page), the amounts under it, then the rest
         raw[0] = (raw[0][0], raw[0][1] + [GAP] + ls)
-        return _browse([(h, part) for h, l in raw for part in _fit(l)], k, foot, sf)
-    return _browse(pages, k, foot, sf)
+        return _browse([(h, part) for h, l in raw for part in _fit(l)], k, foot, sf, review)
+    return _browse(pages, k, foot, sf, review)
 
 
-def _browse(pages, k, foot, sf):
+def _browse(pages, k, foot, sf, review=None):
     """The first page, then the joystick (up/down or left/right) or green through the rest. Red says no on any
     page. Green goes to the next page not seen yet, and signs once every page has been (Austin, 11-03)."""
     i, n, seen = 0, len(pages), 1
@@ -759,7 +855,7 @@ def _browse(pages, k, foot, sf):
         head, lines = pages[i]
         ok = seen >= n
         r = _screen(head, lines, "sign" if ok else "next", k, "%d/%d %s" % (i + 1, n, "down: more" if i < n - 1
-                    else foot) if n > 1 else foot, sf, True)
+                    else foot) if n > 1 else foot, sf, True, review)
         if r is True:
             if ok:
                 return True
@@ -849,7 +945,7 @@ def _replay():
             W.failed(a.get("id"), e)
 
 
-def on_sign(mid, t, again_ok=True, fresh=False):
+def on_sign(mid, t, again_ok=True, fresh=False, review=None):
     global note
     if state != "ok":
         W.send({"id": mid, "type": "error", "error": {"lock": "key not locked yet: press A on the wedgie",
@@ -877,7 +973,7 @@ def on_sign(mid, t, again_ok=True, fresh=False):
                 ui.progress("Reading the transaction", "Safe tx hash", False)
                 h = safe_tx_hash(tx)
                 gc.collect()
-                yes = confirm(tx)
+                yes = confirm(tx, review)
                 break
             except MemoryError:         # never an error for want of memory (Instant Wallet's EXPECTATIONS, rule 0):
                 if not again:           # what's kept back to the heap, then the usual pages from the top, without
@@ -963,11 +1059,35 @@ def keep_safe(chain, safe):
     return len(l)
 
 
+def solana_enabled():
+    # The transfer review lays out two complete addresses on a 240 × 240 display.
+    return (state == "ok" and key is not None and key.get("chip") == "OPTIGA Trust M"
+            and W.SEALED and not W.is_open() and d.width == 240 and d.height == 240)
+
+
 def handle(m):
-    global dirty, sim_nonce
+    global brightness, dirty, sim_nonce
     mid, t = m.get("id"), m.get("type")
+    if t == "debug_brightness":
+        level = m.get("level")
+        if not W.SEALED or W.is_open() or type(level) is not int or not MIN_BRIGHTNESS <= level <= 100:
+            W.send({"id": mid, "type": "error", "error": "Brightness requires sealed Safe Signer and %d–100%%." % MIN_BRIGHTNESS})
+            return
+        d.backlight(level)
+        brightness = level
+        W.send({"id": mid, "type": "debug_brightness", "level": brightness})
+        return
+    if t in DEBUG_CAPTURE_TYPES:
+        handle_debug_capture(mid, t)
+        return
+    review = None
+    if (t in DEBUG_REVIEW_TYPES and m.get("debug_review") is True and type(mid) is int
+            and debug_seconds() and state == "ok" and W.SEALED and not W.is_open()):
+        review = review_sender(mid, debug_deadline)
+    if t not in ("hello", "safe_list", "sol_status"):
+        stop_debug_capture()
     if t == "safe_sign":
-        on_sign(mid, m.get("tx"), fresh=bool(m.get("fresh")))
+        on_sign(mid, m.get("tx"), fresh=bool(m.get("fresh")), review=review)
         dirty = True
     elif t == "safe_data":
         on_data(mid, m)
@@ -1003,8 +1123,23 @@ def handle(m):
             W.send({"id": mid, "type": "error", "error": "bad safe: %s" % e})
             return
         W.send({"id": mid, "type": "ok", "safes": n})
+    elif t in ("sol_status", "sol_enroll", "sol_sign"):
+        if not solana_enabled():
+            W.send({"id": mid, "type": "error", "error": "Solana needs a sealed Safe Signer, initialized Trust M and 240x240 screen"})
+            return
+        _lend()
+        try:
+            import safe_sol
+            safe_sol.handle(d, m, review)
+        finally:
+            sys.modules.pop("safe_sol", None)
+            sys.modules.pop("safe_keccak", None)
+            _unload()
+            dirty = True
     elif t == "hello":
-        W.send(W.hello(mid, running="safe", app=FW, safe=key if state == "ok" else None, signer=signer if state == "ok" else None,
+        W.send(W.hello(mid, running="safe", solana_protocol=int(solana_enabled()), debug_capture=1, debug_review=1,
+                       brightness=brightness, brightness_min=MIN_BRIGHTNESS, app=FW,
+                       safe=key if state == "ok" else None, signer=signer if state == "ok" else None,
                        safe_state=state, safe_chunk=CHUNK, safe_raw=RAW,
                        safe_clear=clear_tag(), safe_sim="p256", safe_review=review_round()))
     else:                               # hello's cousins, shots, jobs, open: the slot's
@@ -1025,6 +1160,7 @@ def pump():
         return
     if R.intr:                          # a Ctrl-C while sealed: the red question (hatch.py)
         R.intr = False
+        stop_debug_capture()
         if W.SEALED and not W.is_open():
             try:
                 import hatch
@@ -1065,9 +1201,11 @@ def pump():
 
 
 def run():
-    global d, keys, _poll, key, state, dirty, note
+    global d, keys, _poll, key, state, dirty, note, debug_displayed, brightness
     d = L.LCD()
+    brightness = 100
     keys = L.Keys(physical=True)
+    stop_debug_capture()
     _poll = select.poll()
     _poll.register(sys.stdin, select.POLLIN)
     try:
@@ -1080,13 +1218,15 @@ def run():
     except Exception as e:              # the address is for the screen; signing works without it
         sys.print_exception(e)
     _keep()
-    W.send(W.hello(None, type="ready", running="safe", app=FW, safe=key if state == "ok" else None,
+    W.send(W.hello(None, type="ready", running="safe", debug_capture=1, app=FW, safe=key if state == "ok" else None,
                    signer=signer if state == "ok" else None, safe_state=state, safe_chunk=CHUNK,
                    safe_clear=clear_tag()))
     _replay()
     while True:
         for k in keys.pressed():
-            if k == "A" and state == "lock":
+            if k == "Y" and debug_deadline is not None:
+                stop_debug_capture()
+            elif k == "A" and state == "lock":
                 if ui.ask(d, "Lock this key?", ["Only if you made it.", "Locked for good:", "never replaced."]):
                     try:
                         lock_key()
@@ -1112,7 +1252,15 @@ def run():
                         note = "no key: %s" % e
                 dirty = True
         pump()
+        seconds = debug_seconds()
+        if not seconds:
+            stop_debug_capture()
         if dirty:
             draw_home()
             dirty = False
+        elif seconds and seconds != debug_displayed:
+            d.fill_rect(0, 224, 240, 16, WHITE)
+            d.center_text("Capture %ds | Y stops" % seconds, 226, INK)
+            d.show_rect(0, 224, 240, 16)
+            debug_displayed = seconds
         time.sleep_ms(20)

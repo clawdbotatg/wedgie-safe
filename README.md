@@ -62,6 +62,14 @@ The wedgie runs `.mpy` for the big modules that load per question (wedgie.json's
 on the wedgie needs one free block it often doesn't have. After editing one, run `tools/mpy.sh` and commit both.
 Bump `FW` in safe.py and `"version"` in wedgie.json together.
 
+## Solana test wallets
+
+On core 0.3.91 or newer, a sealed Safe Signer with an initialized OPTIGA Trust M and a
+240×240 screen can review and sign SOL and legacy SPL transfers for Swig smart wallets on a local
+validator or devnet. The host supplies a separate Solana fee payer. The Wedgie reconstructs the
+transfer and displays the amount and destination before accepting a physical green press. Red or
+60 seconds with no answer declines. See [supported transfers and recovery](docs/solana.md).
+
 ## USB
 
 One JSON line each way. Anything else goes to the wedgie firmware as usual.
